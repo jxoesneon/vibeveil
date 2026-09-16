@@ -250,7 +250,88 @@ pub async fn process_track_and_apply(
     }
 }
 
-pub fn run_interactive_menu(launcher: Option<String>, config: &Config) -> Result<()> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThemePalette {
+    pub bg_hex: String,
+    pub fg_hex: String,
+    pub accent_hex: String,
+    pub selection_bg_hex: String,
+    pub selection_fg_hex: String,
+}
+
+impl Default for ThemePalette {
+    fn default() -> Self {
+        Self {
+            bg_hex: "1a110e".into(),
+            fg_hex: "f1dfd9".into(),
+            accent_hex: "ffb599".into(),
+            selection_bg_hex: "ffb599".into(),
+            selection_fg_hex: "552008".into(),
+        }
+    }
+}
+
+pub fn load_active_theme() -> ThemePalette {
+    let mut palette = ThemePalette::default();
+    if let Some(home) = dirs::home_dir() {
+        let gtk_css = home.join(".config/gtk-3.0/noctalia.css");
+        if let Ok(content) = std::fs::read_to_string(&gtk_css) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("@define-color") {
+                    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                    if parts.len() >= 3 {
+                        let val = parts[2].trim_matches(';').trim_start_matches('#');
+                        if val.len() == 6 {
+                            match parts[1] {
+                                "accent_color" | "accent_bg_color" => {
+                                    palette.accent_hex = val.to_string();
+                                    palette.selection_bg_hex = val.to_string();
+                                }
+                                "window_bg_color" | "view_bg_color" => {
+                                    palette.bg_hex = val.to_string();
+                                }
+                                "window_fg_color" | "view_fg_color" => {
+                                    palette.fg_hex = val.to_string();
+                                }
+                                "accent_fg_color" => {
+                                    palette.selection_fg_hex = val.to_string();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+            return palette;
+        }
+
+        let kitty_conf = home.join(".config/kitty/themes/noctalia.conf");
+        if let Ok(content) = std::fs::read_to_string(&kitty_conf) {
+            for line in content.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let val = parts[1].trim_start_matches('#');
+                    if val.len() == 6 {
+                        match parts[0] {
+                            "background" => palette.bg_hex = val.to_string(),
+                            "foreground" => palette.fg_hex = val.to_string(),
+                            "active_border_color" | "active_tab_background" => {
+                                palette.accent_hex = val.to_string();
+                                palette.selection_bg_hex = val.to_string();
+                            }
+                            "active_tab_foreground" => palette.selection_fg_hex = val.to_string(),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    palette
+}
+
+pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> Result<()> {
     let mut pool = MediaPool::new(
         config.general.media_pool.clone(),
         config.general.extensions.clone(),
@@ -265,13 +346,86 @@ pub fn run_interactive_menu(launcher: Option<String>, config: &Config) -> Result
         return Ok(());
     }
 
+    let mpris_client = MprisClient::new().await.ok();
+    let active_player = if let Some(ref mpris) = mpris_client {
+        mpris.find_active_player().await.ok().flatten()
+    } else {
+        None
+    };
+
+    let active_track = if let (Some(mpris), Some(player)) = (&mpris_client, &active_player) {
+        mpris.get_current_track(player).await.ok().flatten()
+    } else {
+        None
+    };
+
     let mut input_lines = Vec::new();
-    for item in items {
-        let kind = if item.is_video { "[Video]" } else { "[Image]" };
+
+    if let Some(ref track) = active_track {
+        let mood = crate::acoustic::AcousticClassifier::new(config.acoustic.clone())
+            .classify_local(&track.title, &track.artist);
+        let tag_desc = mood.tags.first().map(|s| s.as_str()).unwrap_or("Dynamic");
         input_lines.push(format!(
-            "{:<8} {:<30} | {}",
-            kind,
-            item.name,
+            "🎵  Active: {} - {} [{:.0}% Energy • {}]\tACTION:show_status",
+            track.title,
+            track.artist,
+            mood.energy * 100.0,
+            tag_desc
+        ));
+    } else {
+        input_lines.push("🎵  No Active Player Detected (Idle)\tACTION:show_status".to_string());
+    }
+
+    input_lines.push("──────────────────────────────────────────────────\tACTION:separator".to_string());
+    input_lines.push("📀  Generate Vinyl Record Canvas (Spinning Disc)\tACTION:generate_vinyl".to_string());
+    input_lines.push("🖼️  Generate Ambient Blurred Canvas (Album Art)\tACTION:generate_ambient".to_string());
+    input_lines.push("🎧  Acoustic Vibe Classifier Match (Mood / Tags)\tACTION:match_acoustic".to_string());
+    input_lines.push("🎯  Smart Hybrid Match (Rulebook + Oklab Delta-E)\tACTION:match_hybrid".to_string());
+    input_lines.push("🔒  Synchronize Hyprlock Lockscreen Colors\tACTION:sync_hyprlock".to_string());
+    input_lines.push("🎨  Resync Dynamic System Theme (Noctalia + Hyprland)\tACTION:resync_theme".to_string());
+    input_lines.push("──────────────────────────────────────────────────\tACTION:separator".to_string());
+    input_lines.push("⏯  Toggle Playback (Pause / Resume)\tACTION:toggle_pause".to_string());
+    input_lines.push("⏭  Next Track\tACTION:next_track".to_string());
+    input_lines.push("⏮  Previous Track\tACTION:prev_track".to_string());
+    input_lines.push("──────────────────────────────────────────────────\tACTION:separator".to_string());
+    input_lines.push("🎲  Random Wallpaper (All Categories)\tACTION:random_all".to_string());
+    input_lines.push("⚡  Random Pokémon Wallpaper\tACTION:random_pokemon".to_string());
+    input_lines.push("🌸  Random Anime Wallpaper\tACTION:random_anime".to_string());
+    input_lines.push("──────────────────────────────────────────────────\tACTION:separator".to_string());
+
+    for item in &items {
+        let path_str = item.path.to_string_lossy();
+        let badge = if path_str.contains("/Pokemon/") || path_str.to_lowercase().contains("pokemon")
+        {
+            "⚡ [Pokémon]"
+        } else if path_str.contains("/Anime/") || path_str.to_lowercase().contains("anime") {
+            "🌸 [Anime]"
+        } else if item.is_video {
+            "🎬 [Live]"
+        } else {
+            "🖼  [Static]"
+        };
+
+        let raw_name = item.name.replace('_', " ").replace('-', " ");
+        let clean_name = raw_name
+            .split_whitespace()
+            .map(|word| {
+                let mut c = word.chars();
+                match c.next() {
+                    None => String::new(),
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let suffix = if item.is_video { " (60fps)" } else { " (Static)" };
+
+        input_lines.push(format!(
+            "{:<12} {}{}\t{}",
+            badge,
+            clean_name,
+            suffix,
             item.path.display()
         ));
     }
@@ -285,6 +439,7 @@ pub fn run_interactive_menu(launcher: Option<String>, config: &Config) -> Result
             (p, a)
         }
         None => {
+            let theme = load_active_theme();
             if std::process::Command::new("which")
                 .arg("rofi")
                 .output()
@@ -297,7 +452,12 @@ pub fn run_interactive_menu(launcher: Option<String>, config: &Config) -> Result
                         "-dmenu".to_string(),
                         "-i".to_string(),
                         "-p".to_string(),
-                        "VibeVeil Wallpaper".to_string(),
+                        "󰋋 VibeVeil".to_string(),
+                        "-theme-str".to_string(),
+                        format!(
+                            "window {{ background-color: #{}; border-color: #{}; border-radius: 16px; }}",
+                            theme.bg_hex, theme.accent_hex
+                        ),
                     ],
                 )
             } else if std::process::Command::new("which")
@@ -311,7 +471,40 @@ pub fn run_interactive_menu(launcher: Option<String>, config: &Config) -> Result
                     vec![
                         "--dmenu".to_string(),
                         "--prompt".to_string(),
-                        "VibeVeil Wallpaper".to_string(),
+                        "󰋋 VibeVeil".to_string(),
+                    ],
+                )
+            } else if std::process::Command::new("which")
+                .arg("fuzzel")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+            {
+                (
+                    "fuzzel".to_string(),
+                    vec![
+                        "-d".to_string(),
+                        "-p".to_string(),
+                        "󰋋 VibeVeil ❯ ".to_string(),
+                        "--with-nth=1".to_string(),
+                        "--accept-nth=2".to_string(),
+                        format!("--background-color={}dd", theme.bg_hex),
+                        format!("--text-color={}ff", theme.fg_hex),
+                        format!("--prompt-color={}ff", theme.accent_hex),
+                        format!("--match-color={}ff", theme.accent_hex),
+                        format!("--selection-color={}ee", theme.selection_bg_hex),
+                        format!("--selection-text-color={}ff", theme.selection_fg_hex),
+                        format!("--selection-match-color={}ff", theme.bg_hex),
+                        format!("--border-color={}ff", theme.accent_hex),
+                        "--border-width=2".to_string(),
+                        "--border-radius=16".to_string(),
+                        "--selection-radius=8".to_string(),
+                        "--lines=18".to_string(),
+                        "--width=58".to_string(),
+                        "--horizontal-pad=24".to_string(),
+                        "--vertical-pad=16".to_string(),
+                        "--inner-pad=8".to_string(),
+                        "--line-height=26".to_string(),
                     ],
                 )
             } else {
@@ -355,33 +548,302 @@ pub fn run_interactive_menu(launcher: Option<String>, config: &Config) -> Result
         return Ok(());
     }
 
-    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if selected.is_empty() {
+    let raw_selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if raw_selected.is_empty() || raw_selected.contains("ACTION:separator") {
         return Ok(());
     }
 
-    let selected_path = if let Some((_, path_part)) = selected.split_once('|') {
-        std::path::PathBuf::from(path_part.trim())
+    let action_or_path = if let Some((_, second)) = raw_selected.split_once('\t') {
+        second.trim()
+    } else if let Some((_, second)) = raw_selected.split_once('|') {
+        second.trim()
     } else {
-        std::path::PathBuf::from(selected.trim())
+        raw_selected.trim()
     };
 
-    if selected_path.exists() {
-        println!("Applying selected wallpaper: {}", selected_path.display());
-        let compositor = create_compositor(&config.compositor);
-        let is_video = selected_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| ["mp4", "mkv", "webm"].contains(&e))
-            .unwrap_or(false);
-        let palette = if !is_video {
-            extract_palette_from_image(&selected_path)
-        } else {
-            None
-        };
-        compositor.apply_wallpaper(&selected_path, is_video, palette.as_ref())?;
-    } else {
-        eprintln!("Selected file does not exist: {}", selected_path.display());
+    let compositor = create_compositor(&config.compositor);
+    let canvas_gen = CanvasGenerator::new();
+
+    match action_or_path {
+        "ACTION:show_status" => {
+            if let Some(ref track) = active_track {
+                let msg = format!(
+                    "Player: {}\nTrack: {}\nArtist: {}\nAlbum: {}",
+                    track.player, track.title, track.artist, track.album
+                );
+                let _ = std::process::Command::new("notify-send")
+                    .args(["-a", "VibeVeil", "VibeVeil Status", &msg])
+                    .status();
+            } else {
+                let _ = std::process::Command::new("notify-send")
+                    .args(["-a", "VibeVeil", "VibeVeil Status", "No active media playback detected."])
+                    .status();
+            }
+        }
+        "ACTION:generate_vinyl" => {
+            if let Some(ref track) = active_track
+                && let Some(ref art_url) = track.art_url
+                && let Ok(art_path) = canvas_gen.fetch_or_cache_art(art_url).await
+            {
+                println!("Generating Vinyl Record Canvas for: {} - {}", track.artist, track.title);
+                if let Ok(canvas_path) = canvas_gen.generate_vinyl_canvas(&art_path, 1920, 1080) {
+                    let palette = extract_palette_from_image(&canvas_path);
+                    compositor.apply_wallpaper(&canvas_path, false, palette.as_ref())?;
+                    let _ = std::process::Command::new("notify-send")
+                        .args([
+                            "-a", "VibeVeil",
+                            "-i", art_path.to_string_lossy().as_ref(),
+                            "Vinyl Canvas Applied",
+                            &format!("Spinning disc generated for {} - {}", track.artist, track.title),
+                        ])
+                        .status();
+                }
+            } else {
+                let _ = std::process::Command::new("notify-send")
+                    .args(["-a", "VibeVeil", "Vinyl Canvas", "No active song with album art is playing."])
+                    .status();
+            }
+        }
+        "ACTION:generate_ambient" => {
+            if let Some(ref track) = active_track
+                && let Some(ref art_url) = track.art_url
+                && let Ok(art_path) = canvas_gen.fetch_or_cache_art(art_url).await
+            {
+                println!("Generating Ambient Blurred Canvas for: {} - {}", track.artist, track.title);
+                if let Ok(canvas_path) = canvas_gen.generate_ambient_canvas(&art_path, 1920, 1080) {
+                    let palette = extract_palette_from_image(&canvas_path);
+                    compositor.apply_wallpaper(&canvas_path, false, palette.as_ref())?;
+                    let _ = std::process::Command::new("notify-send")
+                        .args([
+                            "-a", "VibeVeil",
+                            "-i", art_path.to_string_lossy().as_ref(),
+                            "Ambient Canvas Applied",
+                            &format!("Glassmorphic backdrop generated for {} - {}", track.artist, track.title),
+                        ])
+                        .status();
+                }
+            } else {
+                let _ = std::process::Command::new("notify-send")
+                    .args(["-a", "VibeVeil", "Ambient Canvas", "No active song with album art is playing."])
+                    .status();
+            }
+        }
+        "ACTION:match_acoustic" => {
+            if let Some(ref track) = active_track {
+                println!("Evaluating Acoustic Vibe for: {} - {}", track.artist, track.title);
+                let matcher = crate::matcher::AcousticMatcher::new(config);
+                let art_path = if let Some(ref url) = track.art_url {
+                    canvas_gen.fetch_or_cache_art(url).await.ok()
+                } else {
+                    None
+                };
+                let palette = art_path.as_ref().and_then(|p| extract_palette_from_image(p));
+                let ctx = TrackContext {
+                    title: track.title.clone(),
+                    artist: track.artist.clone(),
+                    album: track.album.clone(),
+                    art_path,
+                    palette,
+                };
+                if let Some(matched) = matcher.find_match(&ctx, &pool) {
+                    compositor.apply_wallpaper(&matched.wallpaper_path, matched.is_video, matched.palette.as_ref())?;
+                    let _ = std::process::Command::new("notify-send")
+                        .args([
+                            "-a", "VibeVeil",
+                            "Acoustic Match Applied",
+                            &format!("Matched: {} ({})", matched.wallpaper_path.file_name().unwrap_or_default().to_string_lossy(), matched.reason),
+                        ])
+                        .status();
+                }
+            } else {
+                let _ = std::process::Command::new("notify-send")
+                    .args(["-a", "VibeVeil", "Acoustic Matcher", "No active playback to classify."])
+                    .status();
+            }
+        }
+        "ACTION:match_hybrid" => {
+            if let Some(ref track) = active_track {
+                println!("Running Smart Hybrid Match for: {} - {}", track.artist, track.title);
+                let matcher = create_matcher(config);
+                let art_path = if let Some(ref url) = track.art_url {
+                    canvas_gen.fetch_or_cache_art(url).await.ok()
+                } else {
+                    None
+                };
+                let palette = art_path.as_ref().and_then(|p| extract_palette_from_image(p));
+                let ctx = TrackContext {
+                    title: track.title.clone(),
+                    artist: track.artist.clone(),
+                    album: track.album.clone(),
+                    art_path,
+                    palette,
+                };
+                if let Some(matched) = matcher.find_match(&ctx, &pool) {
+                    compositor.apply_wallpaper(&matched.wallpaper_path, matched.is_video, matched.palette.as_ref())?;
+                    let _ = std::process::Command::new("notify-send")
+                        .args([
+                            "-a", "VibeVeil",
+                            "Hybrid Match Applied",
+                            &format!("Strategy: {} | Score: {:.0}%", matched.strategy, matched.score * 100.0),
+                        ])
+                        .status();
+                }
+            } else {
+                let _ = std::process::Command::new("notify-send")
+                    .args(["-a", "VibeVeil", "Hybrid Matcher", "No active track to match against."])
+                    .status();
+            }
+        }
+        "ACTION:sync_hyprlock" => {
+            println!("Synchronizing lockscreen colors...");
+            let theme = load_active_theme();
+            let parse_rgb = |hex: &str| -> crate::color::ColorRgb {
+                let clean = hex.trim_start_matches('#');
+                if clean.len() >= 6 {
+                    let r = u8::from_str_radix(&clean[0..2], 16).unwrap_or(26);
+                    let g = u8::from_str_radix(&clean[2..4], 16).unwrap_or(17);
+                    let b = u8::from_str_radix(&clean[4..6], 16).unwrap_or(14);
+                    crate::color::ColorRgb::new(r, g, b)
+                } else {
+                    crate::color::ColorRgb::new(26, 17, 14)
+                }
+            };
+            let default_pal = crate::color::PaletteProfile {
+                primary: parse_rgb(&theme.accent_hex),
+                secondary: parse_rgb(&theme.fg_hex),
+                surface: parse_rgb(&theme.bg_hex),
+                accent: parse_rgb(&theme.accent_hex),
+            };
+            let _ = crate::compositor::sync_hyprlock_palette(&config.compositor.hyprlock_colors_path, &default_pal);
+            let _ = std::process::Command::new("notify-send")
+                .args(["-a", "VibeVeil", "Hyprlock Synchronized", &format!("Palette written to {}", config.compositor.hyprlock_colors_path.display())])
+                .status();
+        }
+        "ACTION:resync_theme" => {
+            println!("Resyncing theme templates and compositor...");
+            let _ = std::process::Command::new("noctalia")
+                .args(["msg", "templates-apply"])
+                .status();
+            let _ = std::process::Command::new("hyprctl")
+                .arg("reload")
+                .status();
+            let _ = std::process::Command::new("notify-send")
+                .args(["-a", "VibeVeil", "Theming Resynced", "Applied Noctalia M3 palettes and reloaded Hyprland."])
+                .status();
+        }
+        "ACTION:toggle_pause" => {
+            println!("Toggling playback pause/resume...");
+            let _ = std::process::Command::new("noctalia")
+                .args(["msg", "media", "toggle"])
+                .status()
+                .or_else(|_| {
+                    std::process::Command::new("playerctl")
+                        .arg("play-pause")
+                        .status()
+                });
+        }
+        "ACTION:next_track" => {
+            let _ = std::process::Command::new("noctalia")
+                .args(["msg", "media", "next"])
+                .status()
+                .or_else(|_| {
+                    std::process::Command::new("playerctl")
+                        .arg("next")
+                        .status()
+                });
+        }
+        "ACTION:prev_track" => {
+            let _ = std::process::Command::new("noctalia")
+                .args(["msg", "media", "previous"])
+                .status()
+                .or_else(|_| {
+                    std::process::Command::new("playerctl")
+                        .arg("previous")
+                        .status()
+                });
+        }
+        "ACTION:random_all" => {
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos() as usize;
+            let idx = seed % items.len();
+            let item = &items[idx];
+            println!("Applying random wallpaper: {}", item.path.display());
+            let palette = if !item.is_video {
+                extract_palette_from_image(&item.path)
+            } else {
+                None
+            };
+            compositor.apply_wallpaper(&item.path, item.is_video, palette.as_ref())?;
+        }
+        "ACTION:random_pokemon" => {
+            let candidates: Vec<_> = items
+                .iter()
+                .filter(|i| i.path.to_string_lossy().to_lowercase().contains("pokemon"))
+                .collect();
+            let pool_ref = if candidates.is_empty() {
+                &items.iter().collect::<Vec<_>>()
+            } else {
+                &candidates
+            };
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos() as usize;
+            let idx = seed % pool_ref.len();
+            let item = pool_ref[idx];
+            println!("Applying random Pokémon wallpaper: {}", item.path.display());
+            let palette = if !item.is_video {
+                extract_palette_from_image(&item.path)
+            } else {
+                None
+            };
+            compositor.apply_wallpaper(&item.path, item.is_video, palette.as_ref())?;
+        }
+        "ACTION:random_anime" => {
+            let candidates: Vec<_> = items
+                .iter()
+                .filter(|i| i.path.to_string_lossy().to_lowercase().contains("anime"))
+                .collect();
+            let pool_ref = if candidates.is_empty() {
+                &items.iter().collect::<Vec<_>>()
+            } else {
+                &candidates
+            };
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos() as usize;
+            let idx = seed % pool_ref.len();
+            let item = pool_ref[idx];
+            println!("Applying random Anime wallpaper: {}", item.path.display());
+            let palette = if !item.is_video {
+                extract_palette_from_image(&item.path)
+            } else {
+                None
+            };
+            compositor.apply_wallpaper(&item.path, item.is_video, palette.as_ref())?;
+        }
+        path_str => {
+            let selected_path = std::path::PathBuf::from(path_str);
+            if selected_path.exists() {
+                println!("Applying selected wallpaper: {}", selected_path.display());
+                let is_video = selected_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| ["mp4", "mkv", "webm"].contains(&e))
+                    .unwrap_or(false);
+                let palette = if !is_video {
+                    extract_palette_from_image(&selected_path)
+                } else {
+                    None
+                };
+                compositor.apply_wallpaper(&selected_path, is_video, palette.as_ref())?;
+            } else {
+                eprintln!("Selected file does not exist: {}", selected_path.display());
+            }
+        }
     }
 
     Ok(())
@@ -442,7 +904,7 @@ pub async fn run_cli_command(command: Commands, config: &mut Config) -> Result<(
             );
         }
         Commands::Menu { launcher } => {
-            run_interactive_menu(launcher, config)?;
+            run_interactive_menu(launcher, config).await?;
         }
         Commands::Match { apply } => {
             let mpris = MprisClient::new().await?;
@@ -892,5 +1354,18 @@ mod tests {
             ),
         )
         .await;
+    }
+
+    #[test]
+    fn test_theme_palette_defaults_and_active_loader() {
+        let default_palette = ThemePalette::default();
+        assert_eq!(default_palette.bg_hex, "1a110e");
+        assert_eq!(default_palette.fg_hex, "f1dfd9");
+        assert_eq!(default_palette.accent_hex, "ffb599");
+
+        let active_palette = load_active_theme();
+        assert_eq!(active_palette.bg_hex.len(), 6);
+        assert_eq!(active_palette.fg_hex.len(), 6);
+        assert_eq!(active_palette.accent_hex.len(), 6);
     }
 }
