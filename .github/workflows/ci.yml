@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  lint-and-format:
+    name: Code Formatting & Clippy Lints
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features
+
+  test-and-coverage:
+    name: Test Suite & Coverage Verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Tests with Coverage
+        run: |
+          cargo llvm-cov --all-features --summary-only
+          cargo llvm-cov --all-features --lcov --output-path lcov.info
+
+      - name: Verify Coverage Threshold (Fail under 85%)
+        run: |
+          cargo llvm-cov --all-features --fail-under-lines 85
+
+      - name: Upload Coverage to Codecov (optional)
+        uses: codecov/codecov-action@v4
+        continue-on-error: true
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+
+  build-release:
+    name: Release Build & Asset Packaging Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Release Binary
+        run: cargo build --release --locked
+
+      - name: Test Shell Completions Generation
+        run: |
+          ./target/release/vibeveil completions bash > /dev/null
+          ./target/release/vibeveil completions zsh > /dev/null
+          ./target/release/vibeveil completions fish > /dev/null
+          echo "Completions generated successfully."
