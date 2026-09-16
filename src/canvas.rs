@@ -107,7 +107,9 @@ impl CanvasGenerator {
 
         // Resize album art for the circular label
         let label_diam = (label_radius * 2.0) as u32;
-        let label_art = art.resize_exact(label_diam, label_diam, imageops::FilterType::Lanczos3).to_rgba8();
+        let label_art = art
+            .resize_exact(label_diam, label_diam, imageops::FilterType::Lanczos3)
+            .to_rgba8();
 
         let min_x = ((cx - disc_radius).max(0.0)) as u32;
         let max_x = ((cx + disc_radius).min(width as f32 - 1.0)) as u32;
@@ -143,7 +145,11 @@ impl CanvasGenerator {
 
                     let base = 20 + groove_val + sheen;
                     let val = base.clamp(10, 85) as u8;
-                    canvas.put_pixel(x, y, image::Rgba([val, val, (val as f32 * 1.05).min(255.0) as u8, 255]));
+                    canvas.put_pixel(
+                        x,
+                        y,
+                        image::Rgba([val, val, (val as f32 * 1.05).min(255.0) as u8, 255]),
+                    );
                 }
             }
         }

@@ -70,8 +70,14 @@ impl AcousticClassifier {
             Err(_) => {
                 // Try fallback provider
                 match self.config.fallback {
-                    AcousticProvider::Lastfm => self.fetch_lastfm(title, artist).await.unwrap_or_else(|_| self.classify_local(title, artist)),
-                    AcousticProvider::Musicbrainz => self.fetch_musicbrainz(title, artist).await.unwrap_or_else(|_| self.classify_local(title, artist)),
+                    AcousticProvider::Lastfm => self
+                        .fetch_lastfm(title, artist)
+                        .await
+                        .unwrap_or_else(|_| self.classify_local(title, artist)),
+                    AcousticProvider::Musicbrainz => self
+                        .fetch_musicbrainz(title, artist)
+                        .await
+                        .unwrap_or_else(|_| self.classify_local(title, artist)),
                     AcousticProvider::Local => self.classify_local(title, artist),
                 }
             }
@@ -89,7 +95,11 @@ impl AcousticClassifier {
     }
 
     async fn fetch_lastfm(&self, title: &str, artist: &str) -> Result<AcousticMood> {
-        let api_key = self.config.lastfm_api_key.as_deref().ok_or_else(|| anyhow::anyhow!("No Last.fm API key"))?;
+        let api_key = self
+            .config
+            .lastfm_api_key
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("No Last.fm API key"))?;
         let url = format!(
             "https://ws.audioscrobbler.com/2.0/?method=track.gettoptags&artist={}&track={}&api_key={}&format=json",
             urlencoding::encode(artist),
@@ -126,7 +136,10 @@ impl AcousticClassifier {
         let text = self
             .http
             .get(&url)
-            .header("User-Agent", "VibeVeil/0.1.0 ( https://github.com/jxoesneon/vibeveil )")
+            .header(
+                "User-Agent",
+                "VibeVeil/0.1.0 ( https://github.com/jxoesneon/vibeveil )",
+            )
             .send()
             .await?
             .text()
@@ -203,7 +216,10 @@ impl AcousticClassifier {
         }
 
         let (energy, valence) = if match_count > 0 {
-            (energy_sum / match_count as f32, valence_sum / match_count as f32)
+            (
+                energy_sum / match_count as f32,
+                valence_sum / match_count as f32,
+            )
         } else {
             (0.5, 0.5)
         };
@@ -223,23 +239,38 @@ impl AcousticClassifier {
 
         for t in &tags {
             let t_lower = t.to_lowercase();
-            if t_lower.contains("metal") || t_lower.contains("hardcore") || t_lower.contains("phonk") {
+            if t_lower.contains("metal")
+                || t_lower.contains("hardcore")
+                || t_lower.contains("phonk")
+            {
                 energy_sum += 0.95;
                 valence_sum += 0.4;
                 count += 1;
-            } else if t_lower.contains("rock") || t_lower.contains("punk") || t_lower.contains("epic") {
+            } else if t_lower.contains("rock")
+                || t_lower.contains("punk")
+                || t_lower.contains("epic")
+            {
                 energy_sum += 0.85;
                 valence_sum += 0.5;
                 count += 1;
-            } else if t_lower.contains("synthwave") || t_lower.contains("techno") || t_lower.contains("dance") {
+            } else if t_lower.contains("synthwave")
+                || t_lower.contains("techno")
+                || t_lower.contains("dance")
+            {
                 energy_sum += 0.80;
                 valence_sum += 0.75;
                 count += 1;
-            } else if t_lower.contains("lofi") || t_lower.contains("lo-fi") || t_lower.contains("chill") {
+            } else if t_lower.contains("lofi")
+                || t_lower.contains("lo-fi")
+                || t_lower.contains("chill")
+            {
                 energy_sum += 0.25;
                 valence_sum += 0.6;
                 count += 1;
-            } else if t_lower.contains("ambient") || t_lower.contains("acoustic") || t_lower.contains("piano") {
+            } else if t_lower.contains("ambient")
+                || t_lower.contains("acoustic")
+                || t_lower.contains("piano")
+            {
                 energy_sum += 0.20;
                 valence_sum += 0.55;
                 count += 1;
@@ -316,8 +347,10 @@ mod tests {
     #[test]
     fn test_cache_path_and_tags_to_mood() {
         let tmp = TempDir::new().unwrap();
-        let mut config = AcousticConfig::default();
-        config.cache_dir = tmp.path().to_path_buf();
+        let config = AcousticConfig {
+            cache_dir: tmp.path().to_path_buf(),
+            ..Default::default()
+        };
         let classifier = AcousticClassifier::new(config);
 
         let path = classifier.cache_path("Test Song", "Test Artist");
@@ -336,16 +369,22 @@ mod tests {
     #[tokio::test]
     async fn test_async_classify_with_cache() {
         let tmp = TempDir::new().unwrap();
-        let mut config = AcousticConfig::default();
-        config.cache_dir = tmp.path().to_path_buf();
-        config.provider = AcousticProvider::Local;
+        let config = AcousticConfig {
+            cache_dir: tmp.path().to_path_buf(),
+            provider: AcousticProvider::Local,
+            ..Default::default()
+        };
         let classifier = AcousticClassifier::new(config);
 
-        let mood = classifier.classify("Calm Ambient Meditation", "Artist").await;
+        let mood = classifier
+            .classify("Calm Ambient Meditation", "Artist")
+            .await;
         assert!(mood.energy < 0.5);
 
         // Verify that the disk cache was populated and second classify returns cached version
-        let cached = classifier.classify("Calm Ambient Meditation", "Artist").await;
+        let cached = classifier
+            .classify("Calm Ambient Meditation", "Artist")
+            .await;
         assert_eq!(cached.energy, mood.energy);
         assert_eq!(cached.tags, mood.tags);
     }

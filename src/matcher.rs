@@ -212,7 +212,9 @@ impl MatchStrategy for AcousticMatcher {
         }
 
         let target_tags: &[&str] = if mood.energy >= 0.65 {
-            &["groudon", "battle", "epic", "rock", "metal", "lucy", "zenitsu"]
+            &[
+                "groudon", "battle", "epic", "rock", "metal", "lucy", "zenitsu",
+            ]
         } else if mood.energy <= 0.45 {
             &["ghibli", "nature", "squirtle", "lofi", "chill", "ambient"]
         } else {

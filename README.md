@@ -1,163 +1,172 @@
-# 🌌 VibeVeil
+# vibeveil
 
 [![CI](https://github.com/jxoesneon/vibeveil/actions/workflows/ci.yml/badge.svg)](https://github.com/jxoesneon/vibeveil/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://www.rust-lang.org)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Wayland-informational.svg)](https://wayland.freedesktop.org)
 
-> **Universal Music-Driven Dynamic Wallpaper & Semantic Desktop Theming Engine**  
-> *Architected in safe, asynchronous Rust for Linux and Wayland.*
+A music-driven dynamic wallpaper and desktop theming daemon for Linux (Wayland/X11).
 
----
+vibeveil monitors active audio playback over MPRIS (Spotify, Feishin, Amberol, MPD, etc.) and synchronizes your desktop wallpaper, lockscreen colors, and compositor window borders to match the album art and vibe of the currently playing track.
 
-## ⚡ Overview
+## Features
 
-**VibeVeil** watches your active media playback (Spotify or any MPRIS-compliant player) and dynamically transforms your desktop wallpapers, lockscreen colors, and window borders to match the auditory and aesthetic mood of the music.
+- **Event-Driven MPRIS Listener:** Uses asynchronous D-Bus signals (`zbus`) to subscribe to playback state changes at 0% idle CPU.
+- **Perceptual Color Science:** Computes dominant color clusters and evaluates Oklab delta-E perceptual color distance against indexed wallpapers.
+- **Flexible Match Modes:**
+  - `hybrid`: Evaluates regex rulebooks first, falls back to Oklab color distance, and generates procedural canvases when no match meets the threshold.
+  - `color-distance`: Pure Oklab color matching.
+  - `rulebook`: Deterministic user-defined regex rules mapping artist/album/title/genre to specific tags or files.
+  - `procedural-canvas`: Dynamically synthesizes a blurred ambient background with album art.
+  - `vinyl`: Procedurally generates a vinyl record canvas with concentric micro-grooves and album art center label.
+  - `acoustic`: Mood classification via Last.fm, MusicBrainz, and local heuristic fallbacks with disk caching.
+- **Compositor Integration:**
+  - Native Hyprland border theming and Noctalia Material You integration.
+  - Support for live hardware-accelerated video wallpapers via `mpvpaper` (VA-API / gpu-next).
+  - Generic command backend (`swww`, `swaybg`, `feh`, etc.).
+  - Dynamic lockscreen color synchronization for `hyprlock`.
+- **Desktop Notifications:** Asynchronous notifications over session D-Bus with album art icons and wallpaper names.
+- **Interactive Switcher:** Built-in `vibeveil menu` command that pipes indexed wallpapers into `rofi`, `wofi`, or `dmenu`.
 
-The matching engine is **one level removed**: it has no hardcoded dependencies on specific wallpapers. It operates on an abstract semantic pipeline capable of analyzing **any** directory tree of images, videos, or shaders using color science (Oklab $\Delta E$), metadata rulebooks, acoustic classifiers, or procedural ambient canvases.
-
----
-
-## 📦 Installation & Packaging
+## Installation
 
 ### Arch Linux (AUR)
-```bash
-# Install from source:
-yay -S vibeveil
 
-# Or install precompiled binary:
+Source package:
+```bash
+yay -S vibeveil
+```
+
+Precompiled binary:
+```bash
 yay -S vibeveil-bin
 ```
 
 ### Flatpak
+
 ```bash
 flatpak-builder --user --install --force-clean build-dir packaging/flatpak/org.vibeveil.VibeVeil.yaml
 ```
 
-### Nix / NixOS Flake
-```bash
-# Run directly with flakes:
-nix run github:jxoesneon/vibeveil -- daemon
+### Nix / NixOS
 
-# Install to user profile:
+Run directly with Flakes:
+```bash
+nix run github:jxoesneon/vibeveil -- daemon
+```
+
+Install into profile:
+```bash
 nix profile install github:jxoesneon/vibeveil
 ```
-Or import `packaging/nix/module.nix` into your `configuration.nix`:
+
+NixOS module example:
 ```nix
+# In configuration.nix:
+imports = [ "${vibeveil-src}/packaging/nix/module.nix" ];
+
 services.vibeveil = {
   enable = true;
   settings.general.media_pool = "~/Pictures/Wallpapers";
 };
 ```
 
-### Universal Installer Script
-```bash
-curl -sSf https://raw.githubusercontent.com/jxoesneon/vibeveil/main/install.sh | bash
-# Or from local clone:
-./install.sh
-```
+### From Source
 
-### Build from Source
+Requirements:
+- Rust 1.75+ (edition 2024 compatible)
+- `pkg-config`, `libdbus-1-dev`
+
 ```bash
+git clone https://github.com/jxoesneon/vibeveil.git
+cd vibeveil
 cargo build --release
 install -Dm755 target/release/vibeveil ~/.local/bin/vibeveil
-systemctl --user enable --now packaging/systemd/vibeveil.service
+install -Dm644 packaging/systemd/vibeveil.service ~/.config/systemd/user/vibeveil.service
+systemctl --user daemon-reload
+systemctl --user enable --now vibeveil.service
 ```
 
----
-
-## 🚀 Key Features
-
-* **Zero-Allocation MPRIS D-Bus Client (`zbus`):** Event-driven subscription to player state changes with zero continuous CPU usage.
-* **Perceptual Color Science (`palette` + `image`):** Computes dominant color clusters and Oklab $\Delta E$ perceptual color distance against wallpaper color profiles.
-* **Extensible Rulebook Engine:** Map custom regex patterns against artists, tracks, or genres to target specific tags or folders.
-* **Native Desktop Notifications:** Zero-dependency async toasts over session D-Bus displaying track title, artist, wallpaper name, and album art icon.
-* **Direct Hyprlock Palette Synchronization:** Automatically writes extracted hex color variables (`$primary`, `$secondary`, `$surface`, `$accent`) to `~/.config/hypr/hyprlock-colors.conf`.
-* **Interactive Rofi / Wofi Switcher Menu (`vibeveil menu`):** Pick from your indexed media pool interactively via Rofi/Wofi with instant wallpaper and color application.
-* **Acoustic Mood & Vibe Classifier:** Multi-tier fallback (`Last.fm -> MusicBrainz -> Local heuristic`) resolving energy and valence profiles for dynamic asset mapping.
-* **Procedural Vinyl Canvas Mode (`mode = "vinyl"`):** Dynamic hardware-accelerated synthesis of 1080p vinyl records with micro-grooves, lighting sheen, and circular album art labels.
-* **Compositor Backends:** Native support for Hyprland, Noctalia Material You M3 color extraction, and hardware-accelerated `mpvpaper` live videos.
-* **Smart Pause / Fallback:** Automatically restores your signature default wallpaper (e.g. *Empoleon*) when playback pauses.
-
----
-
-## 🛠️ CLI Usage
+## CLI Usage
 
 ```bash
-# Display currently playing Spotify track & album art URL
+# Display active player, track metadata, and album art status
 vibeveil status
 
-# Match the active song once against your media pool
+# Perform a one-shot dry run match against the media pool
 vibeveil match
 
-# Match and immediately apply wallpaper & update theme
+# Match and immediately apply the wallpaper and system theme
 vibeveil match --apply
 
-# Re-index any folder of wallpapers with perceptual color profiles
+# Open interactive selector in rofi, wofi, or dmenu
+vibeveil menu
+
+# Index wallpaper directory and compute Oklab color profiles
 vibeveil index
 
-# Launch the continuous background daemon
+# Run background listener daemon
 vibeveil daemon
 
-# Launch daemon targeting an arbitrary folder of wallpapers
-vibeveil daemon --pool ~/Pictures/Wallpapers/Anime
+# Generate shell completions (bash, zsh, fish)
+vibeveil completions bash > ~/.local/share/bash-completion/completions/vibeveil
 ```
 
----
+## Configuration
 
-## ⚙️ Configuration (`~/.config/vibeveil/config.toml`)
+Default location: `~/.config/vibeveil/config.toml`. Generate a default template with `vibeveil init-config`.
 
 ```toml
 [general]
-media_pool = "/home/eduardo/Pictures/Wallpapers"
-default_wallpaper = "/home/eduardo/Pictures/Wallpapers/Live/Pokemon/empoleon.mp4"
+media_pool = "~/Pictures/Wallpapers"
+default_wallpaper = "~/Pictures/Wallpapers/default.png"
 on_pause = "restore-default" # "restore-default" | "pause-playback" | "keep-last"
 extensions = ["mp4", "mkv", "webm", "png", "jpg", "jpeg", "webp"]
+desktop_notifications = true
 
 [strategy]
-mode = "hybrid" # "hybrid" | "color-distance" | "rulebook" | "procedural-canvas"
+mode = "hybrid" # "hybrid" | "color-distance" | "rulebook" | "vinyl" | "acoustic"
 color_space = "oklab"
-max_acceptable_delta_e = 45.0
+max_acceptable_delta_e = 42.0
 procedural_fallback = true
+debounce_ms = 250
 
 [compositor]
 backend = "hyprland-noctalia"
 trigger_hyprland_reload = true
 trigger_noctalia_theming = true
+sync_hyprlock = true
+hyprlock_colors_path = "~/.config/hypr/hyprlock-colors.conf"
+on_match_exec = "notify-send 'VibeVeil' 'Applied {file} for {title}'"
 
 [[rules]]
 match_field = "any"
-pattern = "(?i)(synthwave|cyber|electro|night)"
-target_tag_or_path = "cyberpunk_lucy"
+pattern = "(?i)(synthwave|cyber|electro)"
+target_tag_or_path = "cyberpunk"
 
 [[rules]]
 match_field = "any"
-pattern = "(?i)(metal|rock|battle|doom|epic)"
-target_tag_or_path = "groudon"
+pattern = "(?i)(metal|rock|battle|doom)"
+target_tag_or_path = "metal"
 
 [[rules]]
 match_field = "any"
 pattern = "(?i)(lo-?fi|chill|ambient|nature)"
-target_tag_or_path = "ghibli_nature"
+target_tag_or_path = "nature"
 ```
 
----
+## Documentation
 
-## 📚 Institutional Documentation Suite (Document-Driven Development)
+Detailed technical documentation and architecture decision records:
+- [Product Requirements Document (PRD)](docs/PRD.md)
+- [System Architecture Document (SAD)](docs/SYSTEM_ARCHITECTURE.md)
+- [Configuration Specification](docs/CONFIG_SPECIFICATION.md)
+- [Color Science & Oklab Derivation](docs/COLOR_SCIENCE.md)
+- [Operational Runbook & Troubleshooting](docs/RUNBOOK.md)
+- [Architecture Decision Records (ADRs)](docs/adr/)
 
-Comprehensive specifications, architectural decision records, and operational guides are maintained in the [`docs/`](docs/) repository:
+## License
 
-* 📋 [**Product Requirements Document (PRD)**](docs/PRD.md): Vision, user personas, functional/non-functional requirements, edge cases, and acceptance criteria.
-* 🏛️ [**System Architecture Document (SAD)**](docs/SYSTEM_ARCHITECTURE.md): Hexagonal architecture, subsystem decoupling, sequence diagrams, and concurrency model.
-* ⚙️ [**Configuration Specification**](docs/CONFIG_SPECIFICATION.md): TOML schema definitions, strategy tuning, rulebook syntax, and reference rices.
-* 🎨 [**Perceptual Color Science**](docs/COLOR_SCIENCE.md): Theoretical and mathematical foundations of Oklab $\Delta E$, gamma linearization, and multi-cluster palette weighting.
-* 📖 [**Operational Runbook**](docs/RUNBOOK.md): Systemd deployment, troubleshooting matrix, diagnostic commands, and maintenance routines.
+Dual-licensed under either of:
+- MIT License ([LICENSE-MIT](LICENSE-MIT))
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
 
-### Architecture Decision Records (ADRs)
-* [**ADR-0001**](docs/adr/ADR-0001-rust-runtime.md): Adoption of Safe Async Rust as Core Daemon Runtime
-* [**ADR-0002**](docs/adr/ADR-0002-zbus-async-mpris.md): Native Async D-Bus Integration via `zbus`
-* [**ADR-0003**](docs/adr/ADR-0003-oklab-perceptual-distance.md): Selection of Oklab for Perceptual Color Matching
-* [**ADR-0004**](docs/adr/ADR-0004-decoupled-matching-traits.md): Decoupled Strategy Pattern ("One Level Removed")
-* [**ADR-0005**](docs/adr/ADR-0005-compositor-abstraction.md): Compositor Abstraction & Noctalia Material You Pipeline
-
-*Maintained by Jose Eduardo Rojas Jimenez.*
+at your option.

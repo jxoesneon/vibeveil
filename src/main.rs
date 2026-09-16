@@ -174,6 +174,7 @@ pub fn handle_playback_status_transition(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn process_track_and_apply(
     track: &MprisTrack,
     pool: &MediaPool,

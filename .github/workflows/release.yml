@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build-release-artifacts:
     name: Build Release Binary (${{ matrix.target }})
@@ -32,11 +35,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev pkg-config
 
-      - name: Build with Cross if Needed
+      - name: Build and Upload Binary
         uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: vibeveil
           target: ${{ matrix.target }}
           tar: unix
-          zip: false
           token: ${{ secrets.GITHUB_TOKEN }}
