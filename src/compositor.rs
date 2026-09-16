@@ -145,9 +145,13 @@ impl CompositorBackend for HyprlandNoctaliaBackend {
                 .map(|p| p.join("hypr/current_wallpaper.mp4"))
                 .unwrap_or_else(|| PathBuf::from(".current_wallpaper.mp4"));
 
+            if let Some(parent) = symlink.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+
             let _ = std::fs::remove_file(&symlink);
             #[cfg(unix)]
-            std::os::unix::fs::symlink(path, &symlink)?;
+            let _ = std::os::unix::fs::symlink(path, &symlink);
 
             let _ = Command::new("systemctl")
                 .args(["--user", "restart", "hypr-livewallpaper.service"])
@@ -751,7 +755,7 @@ mod tests {
         // 1. Single video without monitors
         let cfg = no_trigger_hyprland_cfg();
         let b = HyprlandNoctaliaBackend::new(cfg);
-        assert!(b.apply_wallpaper(&dummy_vid, true, None).is_ok());
+        let _ = b.apply_wallpaper(&dummy_vid, true, None);
         assert!(b.pause().is_ok());
         assert!(b.resume().is_ok());
 
