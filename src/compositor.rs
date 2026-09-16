@@ -71,12 +71,15 @@ impl CompositorBackend for HyprlandNoctaliaBackend {
                 .args(["--user", "restart", "hypr-livewallpaper.service"])
                 .output();
 
-            // Find thumbnail for theming
+            // Find thumbnail or poster for theming
             if let Some(parent) = path.parent() {
                 let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                 let thumb = parent.join(".thumbnails").join(format!("{}.png", stem));
+                let sibling_png = path.with_extension("png");
                 if thumb.exists() {
                     self.update_noctalia(&thumb);
+                } else if sibling_png.exists() {
+                    self.update_noctalia(&sibling_png);
                 }
             }
         } else {

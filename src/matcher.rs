@@ -136,18 +136,21 @@ impl MatchStrategy for ProceduralCanvasMatcher {
 
     fn find_match(&self, track: &TrackContext, _pool: &MediaPool) -> Option<MatchResult> {
         let art_path = track.art_path.as_ref()?;
-        let canvas_path = self
-            .generator
-            .generate_ambient_canvas(art_path, 1920, 1080)
-            .ok()?;
+        let (canvas_path, is_video) = match self.generator.generate_ambient_video_loop(art_path, 1920, 1080) {
+            Ok(v_path) => (v_path, true),
+            Err(_) => (
+                self.generator.generate_ambient_canvas(art_path, 1920, 1080).ok()?,
+                false,
+            ),
+        };
 
         Some(MatchResult {
             wallpaper_path: canvas_path,
-            is_video: false,
+            is_video,
             palette: track.palette.clone(),
             score: 0.90,
             strategy: "procedural-canvas".into(),
-            reason: "Rendered ambient glassmorphism album canvas".into(),
+            reason: "Rendered ambient glassmorphism animated album canvas".into(),
         })
     }
 }
@@ -171,14 +174,17 @@ impl MatchStrategy for VinylCanvasMatcher {
 
     fn find_match(&self, track: &TrackContext, _pool: &MediaPool) -> Option<MatchResult> {
         let art_path = track.art_path.as_ref()?;
-        let canvas_path = self
-            .generator
-            .generate_vinyl_canvas(art_path, 1920, 1080)
-            .ok()?;
+        let (canvas_path, is_video) = match self.generator.generate_vinyl_video_loop(art_path, 1920, 1080) {
+            Ok(v_path) => (v_path, true),
+            Err(_) => (
+                self.generator.generate_vinyl_canvas(art_path, 1920, 1080).ok()?,
+                false,
+            ),
+        };
 
         Some(MatchResult {
             wallpaper_path: canvas_path,
-            is_video: false,
+            is_video,
             palette: track.palette.clone(),
             score: 0.95,
             strategy: "vinyl-canvas".into(),
@@ -719,6 +725,30 @@ mod tests {
         assert!(res.is_some());
         let m = res.unwrap();
         assert_eq!(m.strategy, "vinyl-canvas");
+        assert!(m.wallpaper_path.exists());
+    }
+
+    #[test]
+    fn test_procedural_canvas_matcher_generates_canvas() {
+        let dir = TempDir::new().unwrap();
+        let pool = MediaPool::new(dir.path().to_path_buf(), vec!["png".into()]);
+        let art_path = dir.path().join("album_ambient.png");
+        let img = image::RgbImage::from_fn(64, 64, |_, _| image::Rgb([120, 80, 200]));
+        img.save(&art_path).unwrap();
+
+        let matcher = ProceduralCanvasMatcher::new();
+        let t = TrackContext {
+            title: "Ambient Song".into(),
+            artist: "Ambient Artist".into(),
+            album: "Ambient Album".into(),
+            art_path: Some(art_path),
+            palette: None,
+        };
+
+        let res = matcher.find_match(&t, &pool);
+        assert!(res.is_some());
+        let m = res.unwrap();
+        assert_eq!(m.strategy, "procedural-canvas");
         assert!(m.wallpaper_path.exists());
     }
 }

@@ -13,7 +13,7 @@ use canvas::CanvasGenerator;
 use clap::{Parser, Subcommand};
 use color::extract_palette_from_image;
 use compositor::{CompositorBackend, create_compositor};
-use config::{Config, PauseAction};
+use config::{Config, MatchMode, PauseAction};
 use matcher::{MatchResult, MatchStrategy, TrackContext, create_matcher};
 use mpris::{MprisClient, MprisTrack, PlaybackStatus};
 use pool::MediaPool;
@@ -376,11 +376,21 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
         input_lines.push("🎵  No Active Player Detected (Idle)\tACTION:show_status".to_string());
     }
 
+    let mode_label = match config.strategy.mode {
+        MatchMode::Vinyl => "Vinyl Record Canvas (60fps Spinning Loop)",
+        MatchMode::ProceduralCanvas => "Ambient Blurred Canvas (Animated Motion)",
+        MatchMode::Hybrid => "Smart Hybrid (Rulebook + Oklab)",
+        MatchMode::Acoustic => "Acoustic Vibe Classifier",
+        MatchMode::ColorDistance => "Color Harmony (Oklab)",
+        MatchMode::Rulebook => "Rulebook Tag Mapping",
+    };
+
+    input_lines.push(format!("✦  Active Daemon Mode: [{}]\tACTION:show_status", mode_label));
     input_lines.push("──────────────────────────────────────────────────\tACTION:separator".to_string());
-    input_lines.push("📀  Generate Vinyl Record Canvas (Spinning Disc)\tACTION:generate_vinyl".to_string());
-    input_lines.push("🖼️  Generate Ambient Blurred Canvas (Album Art)\tACTION:generate_ambient".to_string());
-    input_lines.push("🎧  Acoustic Vibe Classifier Match (Mood / Tags)\tACTION:match_acoustic".to_string());
-    input_lines.push("🎯  Smart Hybrid Match (Rulebook + Oklab Delta-E)\tACTION:match_hybrid".to_string());
+    input_lines.push("📀  Mode: Spinning Vinyl Record Canvas (60fps)\tACTION:set_mode_vinyl".to_string());
+    input_lines.push("🖼️  Mode: Animated Ambient Blurred Canvas\tACTION:set_mode_ambient".to_string());
+    input_lines.push("🎯  Mode: Smart Hybrid Match (Rulebook + Oklab)\tACTION:set_mode_hybrid".to_string());
+    input_lines.push("🎧  Mode: Acoustic Vibe Classifier (Mood / Energy)\tACTION:set_mode_acoustic".to_string());
     input_lines.push("🔒  Synchronize Hyprlock Lockscreen Colors\tACTION:sync_hyprlock".to_string());
     input_lines.push("🎨  Resync Dynamic System Theme (Noctalia + Hyprland)\tACTION:resync_theme".to_string());
     input_lines.push("──────────────────────────────────────────────────\tACTION:separator".to_string());
@@ -580,58 +590,115 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
                     .status();
             }
         }
-        "ACTION:generate_vinyl" => {
+        "ACTION:set_mode_vinyl" | "ACTION:generate_vinyl" => {
+            let mut new_cfg = config.clone();
+            new_cfg.strategy.mode = MatchMode::Vinyl;
+            let _ = new_cfg.save();
+
             if let Some(ref track) = active_track
                 && let Some(ref art_url) = track.art_url
                 && let Ok(art_path) = canvas_gen.fetch_or_cache_art(art_url).await
             {
-                println!("Generating Vinyl Record Canvas for: {} - {}", track.artist, track.title);
-                if let Ok(canvas_path) = canvas_gen.generate_vinyl_canvas(&art_path, 1920, 1080) {
-                    let palette = extract_palette_from_image(&canvas_path);
-                    compositor.apply_wallpaper(&canvas_path, false, palette.as_ref())?;
-                    let _ = std::process::Command::new("notify-send")
-                        .args([
-                            "-a", "VibeVeil",
-                            "-i", art_path.to_string_lossy().as_ref(),
-                            "Vinyl Canvas Applied",
-                            &format!("Spinning disc generated for {} - {}", track.artist, track.title),
-                        ])
-                        .status();
-                }
+                println!(
+                    "Generating Spinning Vinyl Record Canvas for: {} - {}",
+                    track.artist, track.title
+                );
+                let (canvas_path, is_video) =
+                    match canvas_gen.generate_vinyl_video_loop(&art_path, 1920, 1080) {
+                        Ok(p) => (p, true),
+                        Err(_) => (
+                            canvas_gen.generate_vinyl_canvas(&art_path, 1920, 1080)?,
+                            false,
+                        ),
+                    };
+                let poster = canvas_path.with_extension("png");
+                let palette = extract_palette_from_image(&poster)
+                    .or_else(|| extract_palette_from_image(&art_path));
+                compositor.apply_wallpaper(&canvas_path, is_video, palette.as_ref())?;
+                let _ = std::process::Command::new("notify-send")
+                    .args([
+                        "-a",
+                        "VibeVeil",
+                        "-i",
+                        art_path.to_string_lossy().as_ref(),
+                        "Vinyl Mode Active (60fps)",
+                        &format!(
+                            "Spinning disc canvas active for {} - {}. Mode persisted.",
+                            track.artist, track.title
+                        ),
+                    ])
+                    .status();
             } else {
                 let _ = std::process::Command::new("notify-send")
-                    .args(["-a", "VibeVeil", "Vinyl Canvas", "No active song with album art is playing."])
+                    .args([
+                        "-a",
+                        "VibeVeil",
+                        "Vinyl Mode Active",
+                        "Spinning disc canvas set as active mode for all tracks.",
+                    ])
                     .status();
             }
         }
-        "ACTION:generate_ambient" => {
+        "ACTION:set_mode_ambient" | "ACTION:generate_ambient" => {
+            let mut new_cfg = config.clone();
+            new_cfg.strategy.mode = MatchMode::ProceduralCanvas;
+            let _ = new_cfg.save();
+
             if let Some(ref track) = active_track
                 && let Some(ref art_url) = track.art_url
                 && let Ok(art_path) = canvas_gen.fetch_or_cache_art(art_url).await
             {
-                println!("Generating Ambient Blurred Canvas for: {} - {}", track.artist, track.title);
-                if let Ok(canvas_path) = canvas_gen.generate_ambient_canvas(&art_path, 1920, 1080) {
-                    let palette = extract_palette_from_image(&canvas_path);
-                    compositor.apply_wallpaper(&canvas_path, false, palette.as_ref())?;
-                    let _ = std::process::Command::new("notify-send")
-                        .args([
-                            "-a", "VibeVeil",
-                            "-i", art_path.to_string_lossy().as_ref(),
-                            "Ambient Canvas Applied",
-                            &format!("Glassmorphic backdrop generated for {} - {}", track.artist, track.title),
-                        ])
-                        .status();
-                }
+                println!(
+                    "Generating Animated Ambient Canvas for: {} - {}",
+                    track.artist, track.title
+                );
+                let (canvas_path, is_video) =
+                    match canvas_gen.generate_ambient_video_loop(&art_path, 1920, 1080) {
+                        Ok(p) => (p, true),
+                        Err(_) => (
+                            canvas_gen.generate_ambient_canvas(&art_path, 1920, 1080)?,
+                            false,
+                        ),
+                    };
+                let poster = canvas_path.with_extension("png");
+                let palette = extract_palette_from_image(&poster)
+                    .or_else(|| extract_palette_from_image(&art_path));
+                compositor.apply_wallpaper(&canvas_path, is_video, palette.as_ref())?;
+                let _ = std::process::Command::new("notify-send")
+                    .args([
+                        "-a",
+                        "VibeVeil",
+                        "-i",
+                        art_path.to_string_lossy().as_ref(),
+                        "Ambient Canvas Mode Active",
+                        &format!(
+                            "Animated ambient backdrop active for {} - {}. Mode persisted.",
+                            track.artist, track.title
+                        ),
+                    ])
+                    .status();
             } else {
                 let _ = std::process::Command::new("notify-send")
-                    .args(["-a", "VibeVeil", "Ambient Canvas", "No active song with album art is playing."])
+                    .args([
+                        "-a",
+                        "VibeVeil",
+                        "Ambient Canvas Mode Active",
+                        "Animated ambient canvas set as active mode for all tracks.",
+                    ])
                     .status();
             }
         }
-        "ACTION:match_acoustic" => {
+        "ACTION:set_mode_acoustic" | "ACTION:match_acoustic" => {
+            let mut new_cfg = config.clone();
+            new_cfg.strategy.mode = MatchMode::Acoustic;
+            let _ = new_cfg.save();
+
             if let Some(ref track) = active_track {
-                println!("Evaluating Acoustic Vibe for: {} - {}", track.artist, track.title);
-                let matcher = crate::matcher::AcousticMatcher::new(config);
+                println!(
+                    "Evaluating Acoustic Vibe for: {} - {}",
+                    track.artist, track.title
+                );
+                let matcher = crate::matcher::AcousticMatcher::new(&new_cfg);
                 let art_path = if let Some(ref url) = track.art_url {
                     canvas_gen.fetch_or_cache_art(url).await.ok()
                 } else {
@@ -646,25 +713,50 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
                     palette,
                 };
                 if let Some(matched) = matcher.find_match(&ctx, &pool) {
-                    compositor.apply_wallpaper(&matched.wallpaper_path, matched.is_video, matched.palette.as_ref())?;
+                    compositor.apply_wallpaper(
+                        &matched.wallpaper_path,
+                        matched.is_video,
+                        matched.palette.as_ref(),
+                    )?;
                     let _ = std::process::Command::new("notify-send")
                         .args([
-                            "-a", "VibeVeil",
+                            "-a",
+                            "VibeVeil",
                             "Acoustic Match Applied",
-                            &format!("Matched: {} ({})", matched.wallpaper_path.file_name().unwrap_or_default().to_string_lossy(), matched.reason),
+                            &format!(
+                                "Matched: {} ({})",
+                                matched
+                                    .wallpaper_path
+                                    .file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy(),
+                                matched.reason
+                            ),
                         ])
                         .status();
                 }
             } else {
                 let _ = std::process::Command::new("notify-send")
-                    .args(["-a", "VibeVeil", "Acoustic Matcher", "No active playback to classify."])
+                    .args([
+                        "-a",
+                        "VibeVeil",
+                        "Acoustic Matcher",
+                        "Acoustic mode active. No track currently playing.",
+                    ])
                     .status();
             }
         }
-        "ACTION:match_hybrid" => {
+        "ACTION:set_mode_hybrid" | "ACTION:match_hybrid" => {
+            let mut new_cfg = config.clone();
+            new_cfg.strategy.mode = MatchMode::Hybrid;
+            let _ = new_cfg.save();
+
             if let Some(ref track) = active_track {
-                println!("Running Smart Hybrid Match for: {} - {}", track.artist, track.title);
-                let matcher = create_matcher(config);
+                println!(
+                    "Running Smart Hybrid Match for: {} - {}",
+                    track.artist, track.title
+                );
+                let matcher = create_matcher(&new_cfg);
                 let art_path = if let Some(ref url) = track.art_url {
                     canvas_gen.fetch_or_cache_art(url).await.ok()
                 } else {
@@ -679,18 +771,36 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
                     palette,
                 };
                 if let Some(matched) = matcher.find_match(&ctx, &pool) {
-                    compositor.apply_wallpaper(&matched.wallpaper_path, matched.is_video, matched.palette.as_ref())?;
+                    compositor.apply_wallpaper(
+                        &matched.wallpaper_path,
+                        matched.is_video,
+                        matched.palette.as_ref(),
+                    )?;
                     let _ = std::process::Command::new("notify-send")
                         .args([
-                            "-a", "VibeVeil",
-                            "Hybrid Match Applied",
-                            &format!("Strategy: {} | Score: {:.0}%", matched.strategy, matched.score * 100.0),
+                            "-a",
+                            "VibeVeil",
+                            "Hybrid Mode Active",
+                            &format!(
+                                "Matched: {} ({:.0}%)",
+                                matched
+                                    .wallpaper_path
+                                    .file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy(),
+                                matched.score * 100.0
+                            ),
                         ])
                         .status();
                 }
             } else {
                 let _ = std::process::Command::new("notify-send")
-                    .args(["-a", "VibeVeil", "Hybrid Matcher", "No active track to match against."])
+                    .args([
+                        "-a",
+                        "VibeVeil",
+                        "Hybrid Mode Active",
+                        "Smart Hybrid mode set for all tracks.",
+                    ])
                     .status();
             }
         }
@@ -968,13 +1078,13 @@ pub async fn run_cli_command(command: Commands, config: &mut Config) -> Result<(
             println!("  Match Mode : {:?}", config.strategy.mode);
             println!("  Compositor : {:?}", config.compositor.backend);
 
-            let (mut pool, canvas_gen, matcher, compositor) = setup_daemon_components(config);
+            let (mut pool, canvas_gen, _matcher, compositor) = setup_daemon_components(config);
             let count = execute_index_pool(&mut pool, false);
             println!("  Indexed    : {} items in pool", count);
 
             let mpris = Arc::new(MprisClient::new().await?);
             let pool = Arc::new(pool);
-            let max_cache_mb = config.general.max_cache_mb;
+            let _max_cache_mb = config.general.max_cache_mb;
 
             let mut last_track_key: Option<String> = None;
             let mut last_status: Option<PlaybackStatus> = None;
@@ -1010,8 +1120,9 @@ pub async fn run_cli_command(command: Commands, config: &mut Config) -> Result<(
 
                         if let Ok(Some(track)) = mpris.get_current_track(&player).await {
                             let track_key = format!("{}:{}:{}", track.artist, track.title, track.album);
+                            let active_cfg = Config::load();
 
-                            handle_playback_status_transition(track.status, &mut last_status, config, compositor.as_ref());
+                            handle_playback_status_transition(track.status, &mut last_status, &active_cfg, compositor.as_ref());
 
                             if track.status == PlaybackStatus::Playing && last_track_key.as_deref() != Some(&track_key) {
                                 last_track_key = Some(track_key.clone());
@@ -1023,20 +1134,21 @@ pub async fn run_cli_command(command: Commands, config: &mut Config) -> Result<(
 
                                 let pool_clone = pool.clone();
                                 let canvas_gen_clone = canvas_gen.clone();
-                                let matcher_clone = matcher.clone();
+                                let dynamic_matcher: Arc<dyn MatchStrategy> = Arc::from(create_matcher(&active_cfg));
                                 let compositor_clone = compositor.clone();
                                 let dbus_conn = mpris.connection().clone();
-                                let notifications = config.general.desktop_notifications;
+                                let notifications = active_cfg.general.desktop_notifications;
+                                let cache_limit = active_cfg.general.max_cache_mb;
 
                                 let handle = tokio::spawn(async move {
                                     if let Some(matched) = process_track_and_apply(
                                         &track,
                                         &pool_clone,
-                                        matcher_clone.as_ref(),
+                                        dynamic_matcher.as_ref(),
                                         compositor_clone.as_ref(),
                                         &canvas_gen_clone,
                                         true,
-                                        Some(max_cache_mb),
+                                        Some(cache_limit),
                                         notifications,
                                         Some(&dbus_conn),
                                     ).await {
