@@ -1,0 +1,14 @@
+#!/usr/bin/make -f
+%:
+	dh $@ --buildsystem=cargo
+
+override_dh_auto_install:
+	dh_auto_install
+	install -Dm644 packaging/systemd/vibeveil.service debian/vibeveil/usr/lib/systemd/user/vibeveil.service
+	# Shell completions
+	./target/release/vibeveil completions bash > debian/vibeveil.bash
+	./target/release/vibeveil completions zsh > debian/_vibeveil
+	./target/release/vibeveil completions fish > debian/vibeveil.fish
+	install -Dm644 debian/vibeveil.bash debian/vibeveil/usr/share/bash-completion/completions/vibeveil
+	install -Dm644 debian/_vibeveil debian/vibeveil/usr/share/zsh/site-functions/_vibeveil
+	install -Dm644 debian/vibeveil.fish debian/vibeveil/usr/share/fish/vendor_completions.d/vibeveil.fish

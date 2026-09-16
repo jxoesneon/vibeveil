@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="console-application">
+  <id>org.vibeveil.VibeVeil</id>
+  <name>VibeVeil</name>
+  <summary>Universal music-driven dynamic wallpaper &amp; semantic desktop theming engine</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <description>
+    <p>
+      VibeVeil is an ultra-low-latency, zero-polling Linux desktop daemon written in Rust that synchronizes
+      your desktop wallpaper, Material You borders, and lockscreen accents with your currently playing audio
+      stream across Spotify and all MPRIS-compliant media players.
+    </p>
+  </description>
+  <url type="homepage">https://github.com/jxoesneon/vibeveil</url>
+  <url type="bugtracker">https://github.com/jxoesneon/vibeveil/issues</url>
+  <provides>
+    <binary>vibeveil</binary>
+  </provides>
+  <releases>
+    <release version="0.1.0" date="2026-09-15"/>
+  </releases>
+</component>

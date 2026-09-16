@@ -1,0 +1,48 @@
+# Maintainer: Jose Eduardo Rojas Jimenez <joseeduardox@gmail.com>
+pkgname=vibeveil-bin
+_pkgname=vibeveil
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Universal music-driven dynamic wallpaper & semantic desktop theming engine (precompiled binary)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/jxoesneon/vibeveil"
+license=('MIT' 'Apache-2.0')
+depends=('dbus' 'glibc' 'gcc-libs')
+optdepends=(
+    'hyprland: Wayland compositor support'
+    'noctalia-shell: Material You dynamic bar and widget theming'
+    'mpvpaper: Hardware-accelerated video wallpaper daemon'
+    'swww: Efficient Wayland animated wallpaper daemon'
+    'ffmpeg: Automatic thumbnail extraction for video wallpapers'
+    'rofi: Interactive wallpaper switcher menu'
+    'wofi: Interactive Wayland wallpaper switcher menu'
+    'hyprlock: Dynamic lockscreen color synchronization'
+    'libnotify: Desktop notification verification and diagnostics'
+)
+provides=('vibeveil')
+conflicts=('vibeveil' 'vibeveil-git')
+
+source_x86_64=("$url/releases/download/v$pkgver/vibeveil-x86_64-unknown-linux-gnu.tar.gz")
+source_aarch64=("$url/releases/download/v$pkgver/vibeveil-aarch64-unknown-linux-gnu.tar.gz")
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+    # Install binary
+    install -Dm755 "$srcdir/vibeveil" "$pkgdir/usr/bin/$_pkgname"
+
+    # Generate and install shell completions
+    install -d "$pkgdir/usr/share/bash-completion/completions"
+    install -d "$pkgdir/usr/share/zsh/site-functions"
+    install -d "$pkgdir/usr/share/fish/vendor_completions.d"
+
+    "$pkgdir/usr/bin/$_pkgname" completions bash > "$pkgdir/usr/share/bash-completion/completions/$_pkgname"
+    "$pkgdir/usr/bin/$_pkgname" completions zsh > "$pkgdir/usr/share/zsh/site-functions/_$_pkgname"
+    "$pkgdir/usr/bin/$_pkgname" completions fish > "$pkgdir/usr/share/fish/vendor_completions.d/$_pkgname.fish"
+
+    # Install documentation and license
+    install -d "$pkgdir/usr/share/doc/$_pkgname"
+    if [ -f "$srcdir/README.md" ]; then
+        install -Dm644 "$srcdir/README.md" "$pkgdir/usr/share/doc/$_pkgname/README.md"
+    fi
+}

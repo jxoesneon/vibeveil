@@ -1,0 +1,50 @@
+app-id: org.vibeveil.VibeVeil
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: vibeveil
+
+finish-args:
+  # Network access for fetching album art CDNs
+  - --share=network
+  # Inter-Process Communication & Display access
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # Session D-Bus access for MPRIS media players and Desktop Notifications
+  - --socket=session-bus
+  - --talk-name=org.mpris.MediaPlayer2.*
+  - --talk-name=org.freedesktop.DBus
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.freedesktop.portal.Notification
+  # Access to wallpapers and configurations
+  - --filesystem=xdg-pictures:ro
+  - --filesystem=xdg-config/vibeveil:create
+  - --filesystem=xdg-cache/vibeveil:create
+  - --filesystem=xdg-config/hypr:create
+  - --filesystem=xdg-config/noctalia:create
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/vibeveil/cargo
+
+modules:
+  - name: vibeveil
+    buildsystem: simple
+    build-commands:
+      - cargo --offline fetch --manifest-path Cargo.toml
+      - cargo --offline build --release --verbose
+      - install -Dm755 target/release/vibeveil /app/bin/vibeveil
+      - /app/bin/vibeveil completions bash > vibeveil.bash
+      - /app/bin/vibeveil completions zsh > _vibeveil
+      - /app/bin/vibeveil completions fish > vibeveil.fish
+      - install -Dm644 vibeveil.bash /app/share/bash-completion/completions/vibeveil
+      - install -Dm644 _vibeveil /app/share/zsh/site-functions/_vibeveil
+      - install -Dm644 vibeveil.fish /app/share/fish/vendor_completions.d/vibeveil.fish
+      - install -Dm644 packaging/flatpak/org.vibeveil.VibeVeil.metainfo.xml /app/share/metainfo/org.vibeveil.VibeVeil.metainfo.xml
+    sources:
+      - type: dir
+        path: ../../

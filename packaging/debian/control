@@ -1,0 +1,17 @@
+Source: vibeveil
+Section: utils
+Priority: optional
+Maintainer: Jose Eduardo Rojas Jimenez <joseeduardox@gmail.com>
+Build-Depends: debhelper-compat (= 13), cargo, rustc, libdbus-1-dev, pkg-config
+Standards-Version: 4.6.2
+Homepage: https://github.com/jxoesneon/vibeveil
+
+Package: vibeveil
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, dbus
+Suggests: mpvpaper, swww, ffmpeg, rofi | wofi, hyprlock
+Description: Universal music-driven dynamic wallpaper & semantic desktop theming engine
+ VibeVeil is an ultra-low-latency, zero-polling Linux desktop daemon written
+ in Rust that synchronizes your desktop wallpaper, Material You borders,
+ and lockscreen accents with your currently playing audio stream across
+ Spotify and all MPRIS-compliant media players.
