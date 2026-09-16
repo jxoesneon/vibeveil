@@ -1,6 +1,6 @@
 [package]
 name = "vibeveil"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Jose Eduardo Rojas Jimenez <joseeduardox@gmail.com>"]
 description = "Universal music-driven dynamic wallpaper & semantic desktop theming engine in Rust"

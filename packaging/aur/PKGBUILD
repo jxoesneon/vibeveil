@@ -1,6 +1,6 @@
 # Maintainer: Jose Eduardo Rojas Jimenez <joseeduardox@gmail.com>
 pkgname=vibeveil
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Universal music-driven dynamic wallpaper and semantic desktop theming engine in Rust"
 arch=('x86_64' 'aarch64')
