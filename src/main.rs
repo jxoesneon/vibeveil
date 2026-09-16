@@ -210,8 +210,8 @@ pub async fn process_track_and_apply(
     track: &MprisTrack,
     pool: &MediaPool,
     matcher: &dyn MatchStrategy,
-    compositor: &dyn CompositorBackend,
-    canvas_gen: &CanvasGenerator,
+    compositor: Arc<dyn CompositorBackend>,
+    canvas_gen: Arc<CanvasGenerator>,
     apply: bool,
     max_cache_mb: Option<u64>,
     desktop_notifications: bool,
@@ -253,6 +253,38 @@ pub async fn process_track_and_apply(
                 Some(&track.title),
                 Some(&track.artist),
             );
+
+            // If static poster was applied, asynchronously promote to animated video loop
+            if !matched.is_video
+                && (matched.strategy == "vinyl-canvas" || matched.strategy == "procedural-canvas")
+            {
+                let comp = compositor.clone();
+                let cg = canvas_gen.clone();
+                let art = ctx.art_path.clone();
+                let strategy = matched.strategy.clone();
+                let pal = matched.palette.clone();
+                let title = track.title.clone();
+                let artist = track.artist.clone();
+
+                tokio::task::spawn_blocking(move || {
+                    if let Some(art_path) = art {
+                        let video_res = if strategy == "vinyl-canvas" {
+                            cg.generate_vinyl_video_loop(&art_path, 1920, 1080)
+                        } else {
+                            cg.generate_ambient_video_loop(&art_path, 1920, 1080)
+                        };
+                        if let Ok(video_path) = video_res {
+                            let _ = comp.apply_wallpaper_with_meta(
+                                &video_path,
+                                true,
+                                pal.as_ref(),
+                                Some(&title),
+                                Some(&artist),
+                            );
+                        }
+                    }
+                });
+            }
 
             if desktop_notifications && let Some(conn) = dbus_connection {
                 let wall_name = matched
@@ -667,7 +699,7 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
             }
         }
         "ACTION:set_mode_vinyl" | "ACTION:generate_vinyl" => {
-            let mut new_cfg = config.clone();
+            let mut new_cfg = Config::load();
             new_cfg.strategy.mode = MatchMode::Vinyl;
             let _ = new_cfg.save();
 
@@ -716,7 +748,7 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
             }
         }
         "ACTION:set_mode_ambient" | "ACTION:generate_ambient" => {
-            let mut new_cfg = config.clone();
+            let mut new_cfg = Config::load();
             new_cfg.strategy.mode = MatchMode::ProceduralCanvas;
             let _ = new_cfg.save();
 
@@ -765,7 +797,7 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
             }
         }
         "ACTION:set_mode_acoustic" | "ACTION:match_acoustic" => {
-            let mut new_cfg = config.clone();
+            let mut new_cfg = Config::load();
             new_cfg.strategy.mode = MatchMode::Acoustic;
             let _ = new_cfg.save();
 
@@ -825,7 +857,7 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
             }
         }
         "ACTION:set_mode_hybrid" | "ACTION:match_hybrid" => {
-            let mut new_cfg = config.clone();
+            let mut new_cfg = Config::load();
             new_cfg.strategy.mode = MatchMode::Hybrid;
             let _ = new_cfg.save();
 
@@ -907,7 +939,7 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
             }
         }
         "ACTION:toggle_notifications" => {
-            let mut new_cfg = config.clone();
+            let mut new_cfg = Config::load();
             new_cfg.general.desktop_notifications = !new_cfg.general.desktop_notifications;
             let status_msg = if new_cfg.general.desktop_notifications {
                 "Desktop notifications enabled."
@@ -1165,16 +1197,17 @@ pub async fn run_cli_command(command: Commands, config: &mut Config) -> Result<(
             );
             execute_index_pool(&mut pool, false);
 
-            let canvas_gen = CanvasGenerator::new();
+            let canvas_gen = Arc::new(CanvasGenerator::new());
             let matcher = create_matcher(config);
-            let compositor = create_compositor(&config.compositor);
+            let compositor: Arc<dyn CompositorBackend> =
+                Arc::from(create_compositor(&config.compositor));
 
             if let Some(matched) = process_track_and_apply(
                 &track,
                 &pool,
                 matcher.as_ref(),
-                compositor.as_ref(),
-                &canvas_gen,
+                compositor,
+                canvas_gen,
                 apply,
                 Some(config.general.max_cache_mb),
                 config.general.desktop_notifications,
@@ -1221,8 +1254,6 @@ pub async fn run_cli_command(command: Commands, config: &mut Config) -> Result<(
             use futures_util::StreamExt;
 
             'reconnect_loop: loop {
-                let debounce_ms = Config::load().strategy.debounce_ms;
-
                 let mut player = None;
                 while player.is_none() {
                     player = match mpris.find_active_player().await {
@@ -1250,9 +1281,6 @@ pub async fn run_cli_command(command: Commands, config: &mut Config) -> Result<(
                     }
                 };
 
-                let mut pending_update = true;
-                let mut timeout_fut = Box::pin(sleep(Duration::from_millis(0)));
-
                 loop {
                     tokio::select! {
                         msg = stream.next() => {
@@ -1260,11 +1288,6 @@ pub async fn run_cli_command(command: Commands, config: &mut Config) -> Result<(
                                 println!("⚡ Player disconnected. Re-scanning for active MPRIS players...");
                                 break;
                             }
-                            pending_update = true;
-                            timeout_fut = Box::pin(sleep(Duration::from_millis(debounce_ms)));
-                        }
-                        _ = &mut timeout_fut, if pending_update => {
-                            pending_update = false;
 
                             if let Ok(Some(track)) = mpris.get_current_track(&player).await {
                                 let track_key = format!("{}:{}:{}", track.artist, track.title, track.album);
@@ -1279,7 +1302,6 @@ pub async fn run_cli_command(command: Commands, config: &mut Config) -> Result<(
                                 );
 
                                 if is_wallpaper_held() {
-                                    println!("⏸ Wallpaper is held/locked. Skipping track transition.");
                                     continue;
                                 }
 
@@ -1304,8 +1326,8 @@ pub async fn run_cli_command(command: Commands, config: &mut Config) -> Result<(
                                             &track,
                                             &pool_clone,
                                             dynamic_matcher.as_ref(),
-                                            compositor_clone.as_ref(),
-                                            &canvas_gen_clone,
+                                            compositor_clone,
+                                            canvas_gen_clone,
                                             true,
                                             Some(cache_limit),
                                             notifications,
@@ -1563,15 +1585,16 @@ mod tests {
         };
 
         let matcher = create_matcher(&cfg);
-        let compositor = compositor::CustomCommandBackend::new("echo {file}".into());
-        let canvas_gen = CanvasGenerator::new();
+        let compositor: Arc<dyn CompositorBackend> =
+            Arc::new(compositor::CustomCommandBackend::new("echo {file}".into()));
+        let canvas_gen = Arc::new(CanvasGenerator::new());
 
         let res = process_track_and_apply(
             &track,
             &pool,
             matcher.as_ref(),
-            &compositor,
-            &canvas_gen,
+            compositor,
+            canvas_gen,
             true,
             Some(100),
             false,
@@ -1662,6 +1685,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_interactive_menu_all_action_branches() {
+        struct ConfigRestoreGuard {
+            path: std::path::PathBuf,
+            original_content: Option<String>,
+        }
+        impl Drop for ConfigRestoreGuard {
+            fn drop(&mut self) {
+                if let Some(ref content) = self.original_content {
+                    let _ = std::fs::write(&self.path, content);
+                } else {
+                    let _ = std::fs::remove_file(&self.path);
+                }
+            }
+        }
+        let cfg_path = Config::config_path();
+        let _guard = ConfigRestoreGuard {
+            original_content: std::fs::read_to_string(&cfg_path).ok(),
+            path: cfg_path,
+        };
+
         let pool_dir = TempDir::new().unwrap();
         let test_img = pool_dir.path().join("pokemon_lucario.png");
         let img = image::RgbImage::from_fn(32, 32, |_, _| image::Rgb([10, 20, 30]));

@@ -158,14 +158,7 @@ impl CanvasGenerator {
         Ok(out_path)
     }
 
-    /// Procedurally synthesizes a seamless rotating vinyl record video loop (MP4)
-    /// and accompanying static poster for theming extraction.
-    pub fn generate_vinyl_video_loop(
-        &self,
-        art_path: &Path,
-        width: u32,
-        height: u32,
-    ) -> Result<PathBuf> {
+    fn vinyl_hash(&self, art_path: &Path) -> String {
         let mut hasher = Sha256::new();
         hasher.update(art_path.to_string_lossy().as_bytes());
         if let Ok(metadata) = std::fs::metadata(art_path) {
@@ -176,21 +169,51 @@ impl CanvasGenerator {
                 hasher.update(dur.as_secs().to_le_bytes());
             }
         }
-        let hash = format!("{:x}", hasher.finalize());
-        let out_mp4 = self.cache_dir.join(format!("{}_vinyl.mp4", hash));
-        let out_png = self.cache_dir.join(format!("{}_vinyl.png", hash));
+        format!("{:x}", hasher.finalize())
+    }
 
+    pub fn cached_vinyl_video_loop(&self, art_path: &Path) -> Option<PathBuf> {
+        let hash = self.vinyl_hash(art_path);
+        let out_mp4 = self.cache_dir.join(format!("{}_vinyl.mp4", hash));
         if out_mp4.exists()
             && std::fs::metadata(&out_mp4)
                 .map(|m| m.len() > 1000)
                 .unwrap_or(false)
         {
-            return Ok(out_mp4);
+            Some(out_mp4)
+        } else {
+            None
+        }
+    }
+
+    pub fn cached_ambient_video_loop(&self, art_path: &Path) -> Option<PathBuf> {
+        let hash = self.vinyl_hash(art_path);
+        let out_mp4 = self.cache_dir.join(format!("{}_ambient.mp4", hash));
+        if out_mp4.exists()
+            && std::fs::metadata(&out_mp4)
+                .map(|m| m.len() > 1000)
+                .unwrap_or(false)
+        {
+            Some(out_mp4)
+        } else {
+            None
+        }
+    }
+
+    pub fn generate_vinyl_poster(
+        &self,
+        art_path: &Path,
+        width: u32,
+        height: u32,
+    ) -> Result<PathBuf> {
+        let hash = self.vinyl_hash(art_path);
+        let out_png = self.cache_dir.join(format!("{}_vinyl.png", hash));
+        if out_png.exists() {
+            return Ok(out_png);
         }
 
         let art = image::open(art_path)?;
 
-        // 1. Create dark ambient blurred background
         let bg_small = art.resize_exact(80, 45, imageops::FilterType::Nearest);
         let bg_blurred = bg_small.blur(10.0);
         let mut bg_canvas = bg_blurred
@@ -203,7 +226,6 @@ impl CanvasGenerator {
             pixel[2] = (pixel[2] as f32 * 0.35) as u8;
         }
 
-        // 2. Vinyl disc dimensions
         let disc_radius = (height as f32 * 0.42).min(width as f32 * 0.42);
         let disc_dim = ((disc_radius * 2.0).ceil() as u32).max(100);
         let cx = disc_dim as f32 / 2.0;
@@ -253,20 +275,138 @@ impl CanvasGenerator {
             }
         }
 
-        // 3. Save poster frame (composite for fallback & theming)
-        let mut poster = bg_canvas.clone();
+        let mut poster = bg_canvas;
         let pos_x = (width.saturating_sub(disc_dim)) / 2;
         let pos_y = (height.saturating_sub(disc_dim)) / 2;
         imageops::overlay(&mut poster, &disc_canvas, pos_x as i64, pos_y as i64);
         poster.save(&out_png)?;
 
-        // 4. Save temp files for ffmpeg
+        Ok(out_png)
+    }
+
+    pub fn generate_ambient_poster(
+        &self,
+        art_path: &Path,
+        width: u32,
+        height: u32,
+    ) -> Result<PathBuf> {
+        let hash = self.vinyl_hash(art_path);
+        let out_png = self.cache_dir.join(format!("{}_ambient.png", hash));
+        if out_png.exists() {
+            return Ok(out_png);
+        }
+
+        let art = image::open(art_path)?;
+        let bg_small = art.resize_exact(80, 45, imageops::FilterType::Nearest);
+        let bg_blurred = bg_small.blur(8.0);
+        let mut bg_canvas = bg_blurred
+            .resize_exact(width, height, imageops::FilterType::Triangle)
+            .to_rgba8();
+
+        for pixel in bg_canvas.pixels_mut() {
+            pixel[0] = (pixel[0] as f32 * 0.45) as u8;
+            pixel[1] = (pixel[1] as f32 * 0.45) as u8;
+            pixel[2] = (pixel[2] as f32 * 0.45) as u8;
+        }
+
+        let card_size = (height as f32 * 0.58) as u32;
+        let card = art.resize_exact(card_size, card_size, imageops::FilterType::Lanczos3);
+
+        let mut poster = bg_canvas;
+        let pos_x = (width.saturating_sub(card_size)) / 2;
+        let pos_y = (height.saturating_sub(card_size)) / 2;
+        imageops::overlay(&mut poster, &card, pos_x as i64, pos_y as i64);
+        poster.save(&out_png)?;
+
+        Ok(out_png)
+    }
+
+    pub fn generate_vinyl_video_loop(
+        &self,
+        art_path: &Path,
+        width: u32,
+        height: u32,
+    ) -> Result<PathBuf> {
+        let hash = self.vinyl_hash(art_path);
+        let out_mp4 = self.cache_dir.join(format!("{}_vinyl.mp4", hash));
+
+        if out_mp4.exists()
+            && std::fs::metadata(&out_mp4)
+                .map(|m| m.len() > 1000)
+                .unwrap_or(false)
+        {
+            return Ok(out_mp4);
+        }
+
+        let _ = self.generate_vinyl_poster(art_path, width, height)?;
+
+        let art = image::open(art_path)?;
+        let bg_small = art.resize_exact(80, 45, imageops::FilterType::Nearest);
+        let bg_blurred = bg_small.blur(10.0);
+        let mut bg_canvas = bg_blurred
+            .resize_exact(width, height, imageops::FilterType::Triangle)
+            .to_rgba8();
+
+        for pixel in bg_canvas.pixels_mut() {
+            pixel[0] = (pixel[0] as f32 * 0.35) as u8;
+            pixel[1] = (pixel[1] as f32 * 0.35) as u8;
+            pixel[2] = (pixel[2] as f32 * 0.35) as u8;
+        }
+
+        let disc_radius = (height as f32 * 0.42).min(width as f32 * 0.42);
+        let disc_dim = ((disc_radius * 2.0).ceil() as u32).max(100);
+        let cx = disc_dim as f32 / 2.0;
+        let cy = disc_dim as f32 / 2.0;
+        let label_radius = disc_radius * 0.38;
+        let spindle_radius = disc_radius * 0.045;
+
+        let label_diam = (label_radius * 2.0) as u32;
+        let label_art = art
+            .resize_exact(label_diam, label_diam, imageops::FilterType::Lanczos3)
+            .to_rgba8();
+
+        let mut disc_canvas = image::RgbaImage::new(disc_dim, disc_dim);
+
+        for y in 0..disc_dim {
+            for x in 0..disc_dim {
+                let dx = x as f32 - cx;
+                let dy = y as f32 - cy;
+                let dist = (dx * dx + dy * dy).sqrt();
+
+                if dist > disc_radius {
+                    continue;
+                }
+
+                if dist <= spindle_radius {
+                    disc_canvas.put_pixel(x, y, image::Rgba([18, 18, 18, 255]));
+                } else if dist <= label_radius {
+                    let lx = (dx + label_radius) as u32;
+                    let ly = (dy + label_radius) as u32;
+                    if lx < label_diam && ly < label_diam {
+                        let p = label_art.get_pixel(lx, ly);
+                        disc_canvas.put_pixel(x, y, *p);
+                    }
+                } else {
+                    let groove_val = ((dist * 1.8).sin() * 12.0) as i16;
+                    let angle = dy.atan2(dx);
+                    let sheen = ((angle * 2.0).sin().abs() * 22.0) as i16;
+
+                    let base = 20 + groove_val + sheen;
+                    let val = base.clamp(10, 85) as u8;
+                    disc_canvas.put_pixel(
+                        x,
+                        y,
+                        image::Rgba([val, val, (val as f32 * 1.05).min(255.0) as u8, 255]),
+                    );
+                }
+            }
+        }
+
         let bg_tmp = self.cache_dir.join(format!("{}_bg_tmp.png", hash));
         let disc_tmp = self.cache_dir.join(format!("{}_disc_tmp.png", hash));
         bg_canvas.save(&bg_tmp)?;
         disc_canvas.save(&disc_tmp)?;
 
-        // 5. Render 2-second seamless rotating loop with FFmpeg
         let output = std::process::Command::new("ffmpeg")
             .args([
                 "-y",
@@ -296,6 +436,8 @@ impl CanvasGenerator {
                 "yuv420p",
                 "-preset",
                 "ultrafast",
+                "-threads",
+                "0",
                 "-r",
                 "30",
                 out_mp4.to_string_lossy().as_ref(),
@@ -312,27 +454,14 @@ impl CanvasGenerator {
         }
     }
 
-    /// Procedurally synthesizes a smooth ambient breathing/floating card loop (MP4)
-    /// with an accompanying static poster for theming extraction.
     pub fn generate_ambient_video_loop(
         &self,
         art_path: &Path,
         width: u32,
         height: u32,
     ) -> Result<PathBuf> {
-        let mut hasher = Sha256::new();
-        hasher.update(art_path.to_string_lossy().as_bytes());
-        if let Ok(metadata) = std::fs::metadata(art_path) {
-            hasher.update(metadata.len().to_le_bytes());
-            if let Ok(mtime) = metadata.modified()
-                && let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH)
-            {
-                hasher.update(dur.as_secs().to_le_bytes());
-            }
-        }
-        let hash = format!("{:x}", hasher.finalize());
+        let hash = self.vinyl_hash(art_path);
         let out_mp4 = self.cache_dir.join(format!("{}_ambient.mp4", hash));
-        let out_png = self.cache_dir.join(format!("{}_ambient.png", hash));
 
         if out_mp4.exists()
             && std::fs::metadata(&out_mp4)
@@ -342,9 +471,9 @@ impl CanvasGenerator {
             return Ok(out_mp4);
         }
 
-        let art = image::open(art_path)?;
+        let _ = self.generate_ambient_poster(art_path, width, height)?;
 
-        // 1. Background
+        let art = image::open(art_path)?;
         let bg_small = art.resize_exact(80, 45, imageops::FilterType::Nearest);
         let bg_blurred = bg_small.blur(8.0);
         let mut bg_canvas = bg_blurred
@@ -357,24 +486,14 @@ impl CanvasGenerator {
             pixel[2] = (pixel[2] as f32 * 0.45) as u8;
         }
 
-        // 2. Center card
         let card_size = (height as f32 * 0.58) as u32;
         let card = art.resize_exact(card_size, card_size, imageops::FilterType::Lanczos3);
 
-        // 3. Save poster
-        let mut poster = bg_canvas.clone();
-        let pos_x = (width.saturating_sub(card_size)) / 2;
-        let pos_y = (height.saturating_sub(card_size)) / 2;
-        imageops::overlay(&mut poster, &card, pos_x as i64, pos_y as i64);
-        poster.save(&out_png)?;
-
-        // 4. Save temp files for ffmpeg
         let bg_tmp = self.cache_dir.join(format!("{}_amb_bg_tmp.png", hash));
         let card_tmp = self.cache_dir.join(format!("{}_amb_card_tmp.png", hash));
         bg_canvas.save(&bg_tmp)?;
         card.save(&card_tmp)?;
 
-        // 5. Render 3-second breathing/floating loop with FFmpeg
         let output = std::process::Command::new("ffmpeg")
             .args([
                 "-y",
@@ -383,7 +502,7 @@ impl CanvasGenerator {
                 "-framerate",
                 "24",
                 "-t",
-                "3",
+                "2",
                 "-i",
                 bg_tmp.to_string_lossy().as_ref(),
                 "-loop",
@@ -391,11 +510,11 @@ impl CanvasGenerator {
                 "-framerate",
                 "24",
                 "-t",
-                "3",
+                "2",
                 "-i",
                 card_tmp.to_string_lossy().as_ref(),
                 "-filter_complex",
-                "[1:v]format=rgba[c];[0:v][c]overlay=(W-w)/2:'(H-h)/2+8*sin(2*PI*t/3)':shortest=1[outv]",
+                "[1:v]format=rgba[c];[0:v][c]overlay=(W-w)/2:'(H-h)/2+8*sin(2*PI*t/2)':shortest=1[outv]",
                 "-map",
                 "[outv]",
                 "-c:v",
@@ -406,6 +525,8 @@ impl CanvasGenerator {
                 "ultrafast",
                 "-tune",
                 "fastdecode",
+                "-threads",
+                "0",
                 "-r",
                 "24",
                 out_mp4.to_string_lossy().as_ref(),

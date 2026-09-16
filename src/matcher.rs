@@ -136,22 +136,25 @@ impl MatchStrategy for ProceduralCanvasMatcher {
 
     fn find_match(&self, track: &TrackContext, _pool: &MediaPool) -> Option<MatchResult> {
         let art_path = track.art_path.as_ref()?;
-        let (canvas_path, is_video) = match self
+        if let Some(cached) = self.generator.cached_ambient_video_loop(art_path) {
+            return Some(MatchResult {
+                wallpaper_path: cached,
+                is_video: true,
+                palette: track.palette.clone(),
+                score: 0.90,
+                strategy: "procedural-canvas".into(),
+                reason: "Rendered ambient glassmorphism animated album canvas (cached loop)".into(),
+            });
+        }
+
+        let poster_path = self
             .generator
-            .generate_ambient_video_loop(art_path, 1920, 1080)
-        {
-            Ok(v_path) => (v_path, true),
-            Err(_) => (
-                self.generator
-                    .generate_ambient_canvas(art_path, 1920, 1080)
-                    .ok()?,
-                false,
-            ),
-        };
+            .generate_ambient_poster(art_path, 1920, 1080)
+            .ok()?;
 
         Some(MatchResult {
-            wallpaper_path: canvas_path,
-            is_video,
+            wallpaper_path: poster_path,
+            is_video: false,
             palette: track.palette.clone(),
             score: 0.90,
             strategy: "procedural-canvas".into(),
@@ -179,22 +182,25 @@ impl MatchStrategy for VinylCanvasMatcher {
 
     fn find_match(&self, track: &TrackContext, _pool: &MediaPool) -> Option<MatchResult> {
         let art_path = track.art_path.as_ref()?;
-        let (canvas_path, is_video) = match self
+        if let Some(cached) = self.generator.cached_vinyl_video_loop(art_path) {
+            return Some(MatchResult {
+                wallpaper_path: cached,
+                is_video: true,
+                palette: track.palette.clone(),
+                score: 0.95,
+                strategy: "vinyl-canvas".into(),
+                reason: "Synthesized procedural spinning vinyl disc canvas with album label (cached loop)".into(),
+            });
+        }
+
+        let poster_path = self
             .generator
-            .generate_vinyl_video_loop(art_path, 1920, 1080)
-        {
-            Ok(v_path) => (v_path, true),
-            Err(_) => (
-                self.generator
-                    .generate_vinyl_canvas(art_path, 1920, 1080)
-                    .ok()?,
-                false,
-            ),
-        };
+            .generate_vinyl_poster(art_path, 1920, 1080)
+            .ok()?;
 
         Some(MatchResult {
-            wallpaper_path: canvas_path,
-            is_video,
+            wallpaper_path: poster_path,
+            is_video: false,
             palette: track.palette.clone(),
             score: 0.95,
             strategy: "vinyl-canvas".into(),
