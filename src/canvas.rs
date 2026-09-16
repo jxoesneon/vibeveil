@@ -169,11 +169,11 @@ impl CanvasGenerator {
         let mut hasher = Sha256::new();
         hasher.update(art_path.to_string_lossy().as_bytes());
         if let Ok(metadata) = std::fs::metadata(art_path) {
-            hasher.update(&metadata.len().to_le_bytes());
-            if let Ok(mtime) = metadata.modified() {
-                if let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) {
-                    hasher.update(&dur.as_secs().to_le_bytes());
-                }
+            hasher.update(metadata.len().to_le_bytes());
+            if let Ok(mtime) = metadata.modified()
+                && let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH)
+            {
+                hasher.update(dur.as_secs().to_le_bytes());
             }
         }
         let hash = format!("{:x}", hasher.finalize());
@@ -323,11 +323,11 @@ impl CanvasGenerator {
         let mut hasher = Sha256::new();
         hasher.update(art_path.to_string_lossy().as_bytes());
         if let Ok(metadata) = std::fs::metadata(art_path) {
-            hasher.update(&metadata.len().to_le_bytes());
-            if let Ok(mtime) = metadata.modified() {
-                if let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) {
-                    hasher.update(&dur.as_secs().to_le_bytes());
-                }
+            hasher.update(metadata.len().to_le_bytes());
+            if let Ok(mtime) = metadata.modified()
+                && let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH)
+            {
+                hasher.update(dur.as_secs().to_le_bytes());
             }
         }
         let hash = format!("{:x}", hasher.finalize());
@@ -418,7 +418,10 @@ impl CanvasGenerator {
         match output {
             Ok(res) if res.status.success() && out_mp4.exists() => Ok(out_mp4),
             Ok(res) => {
-                anyhow::bail!("FFmpeg ambient failed with exit code: {:?}", res.status.code())
+                anyhow::bail!(
+                    "FFmpeg ambient failed with exit code: {:?}",
+                    res.status.code()
+                )
             }
             Err(e) => anyhow::bail!("Failed to execute FFmpeg: {}", e),
         }

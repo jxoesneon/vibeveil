@@ -141,13 +141,37 @@ pub fn format_match_result(track: &MprisTrack, matched: &MatchResult) -> String 
     out
 }
 
+pub fn is_wallpaper_held() -> bool {
+    dirs::cache_dir()
+        .map(|p| p.join("vibeveil/hold_lock").exists())
+        .unwrap_or(false)
+}
+
+pub fn toggle_wallpaper_hold() -> Result<bool> {
+    let path = dirs::cache_dir()
+        .map(|p| p.join("vibeveil/hold_lock"))
+        .unwrap_or_else(|| std::path::PathBuf::from(".cache/vibeveil/hold_lock"));
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    if path.exists() {
+        std::fs::remove_file(path)?;
+        Ok(false)
+    } else {
+        std::fs::write(path, b"held")?;
+        Ok(true)
+    }
+}
+
 pub fn handle_playback_status_transition(
     new_status: PlaybackStatus,
     last_status: &mut Option<PlaybackStatus>,
     config: &Config,
     compositor: &dyn CompositorBackend,
+    last_track_key: &mut Option<String>,
 ) {
     if *last_status != Some(new_status) {
+        let prev_status = *last_status;
         *last_status = Some(new_status);
         match new_status {
             PlaybackStatus::Paused | PlaybackStatus::Stopped => match config.general.on_pause {
@@ -155,6 +179,7 @@ pub fn handle_playback_status_transition(
                     compositor.pause().ok();
                 }
                 PauseAction::RestoreDefault => {
+                    *last_track_key = None;
                     if let Some(ref def) = config.general.default_wallpaper
                         && def.exists()
                     {
@@ -168,6 +193,12 @@ pub fn handle_playback_status_transition(
                 PauseAction::KeepLast => {}
             },
             PlaybackStatus::Playing => {
+                if (prev_status == Some(PlaybackStatus::Paused)
+                    || prev_status == Some(PlaybackStatus::Stopped))
+                    && config.general.on_pause == PauseAction::RestoreDefault
+                {
+                    *last_track_key = None;
+                }
                 compositor.resume().ok();
             }
         }
@@ -215,10 +246,12 @@ pub async fn process_track_and_apply(
 
     if let Some(matched) = matcher.find_match(&ctx, pool) {
         if apply {
-            let _ = compositor.apply_wallpaper(
+            let _ = compositor.apply_wallpaper_with_meta(
                 &matched.wallpaper_path,
                 matched.is_video,
                 matched.palette.as_ref(),
+                Some(&track.title),
+                Some(&track.artist),
             );
 
             if desktop_notifications && let Some(conn) = dbus_connection {
@@ -385,23 +418,57 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
         MatchMode::Rulebook => "Rulebook Tag Mapping",
     };
 
-    input_lines.push(format!("✦  Active Daemon Mode: [{}]\tACTION:show_status", mode_label));
-    input_lines.push("──────────────────────────────────────────────────\tACTION:separator".to_string());
-    input_lines.push("📀  Mode: Spinning Vinyl Record Canvas (60fps)\tACTION:set_mode_vinyl".to_string());
-    input_lines.push("🖼️  Mode: Animated Ambient Blurred Canvas\tACTION:set_mode_ambient".to_string());
-    input_lines.push("🎯  Mode: Smart Hybrid Match (Rulebook + Oklab)\tACTION:set_mode_hybrid".to_string());
-    input_lines.push("🎧  Mode: Acoustic Vibe Classifier (Mood / Energy)\tACTION:set_mode_acoustic".to_string());
-    input_lines.push("🔒  Synchronize Hyprlock Lockscreen Colors\tACTION:sync_hyprlock".to_string());
-    input_lines.push("🎨  Resync Dynamic System Theme (Noctalia + Hyprland)\tACTION:resync_theme".to_string());
-    input_lines.push("──────────────────────────────────────────────────\tACTION:separator".to_string());
+    input_lines.push(format!(
+        "✦  Active Daemon Mode: [{}]\tACTION:show_status",
+        mode_label
+    ));
+    input_lines
+        .push("──────────────────────────────────────────────────\tACTION:separator".to_string());
+    input_lines
+        .push("📀  Mode: Spinning Vinyl Record Canvas (60fps)\tACTION:set_mode_vinyl".to_string());
+    input_lines
+        .push("🖼️  Mode: Animated Ambient Blurred Canvas\tACTION:set_mode_ambient".to_string());
+    input_lines.push(
+        "🎯  Mode: Smart Hybrid Match (Rulebook + Oklab)\tACTION:set_mode_hybrid".to_string(),
+    );
+    input_lines.push(
+        "🎧  Mode: Acoustic Vibe Classifier (Mood / Energy)\tACTION:set_mode_acoustic".to_string(),
+    );
+    let held = is_wallpaper_held();
+    if held {
+        input_lines.push(
+            "📌  Wallpaper Lock: ACTIVE (Click to Unlock Auto-Switching)\tACTION:toggle_hold"
+                .to_string(),
+        );
+    } else {
+        input_lines.push(
+            "📌  Hold Current Wallpaper (Pause Music Reactions)\tACTION:toggle_hold".to_string(),
+        );
+    }
+
+    let notif_label = if config.general.desktop_notifications {
+        "🔔  Desktop Notifications: [ON] (Click to Disable)\tACTION:toggle_notifications"
+    } else {
+        "🔕  Desktop Notifications: [OFF] (Click to Enable)\tACTION:toggle_notifications"
+    };
+    input_lines.push(notif_label.to_string());
+    input_lines
+        .push("🔒  Synchronize Hyprlock Lockscreen Colors\tACTION:sync_hyprlock".to_string());
+    input_lines.push(
+        "🎨  Resync Dynamic System Theme (Noctalia + Hyprland)\tACTION:resync_theme".to_string(),
+    );
+    input_lines
+        .push("──────────────────────────────────────────────────\tACTION:separator".to_string());
     input_lines.push("⏯  Toggle Playback (Pause / Resume)\tACTION:toggle_pause".to_string());
     input_lines.push("⏭  Next Track\tACTION:next_track".to_string());
     input_lines.push("⏮  Previous Track\tACTION:prev_track".to_string());
-    input_lines.push("──────────────────────────────────────────────────\tACTION:separator".to_string());
+    input_lines
+        .push("──────────────────────────────────────────────────\tACTION:separator".to_string());
     input_lines.push("🎲  Random Wallpaper (All Categories)\tACTION:random_all".to_string());
     input_lines.push("⚡  Random Pokémon Wallpaper\tACTION:random_pokemon".to_string());
     input_lines.push("🌸  Random Anime Wallpaper\tACTION:random_anime".to_string());
-    input_lines.push("──────────────────────────────────────────────────\tACTION:separator".to_string());
+    input_lines
+        .push("──────────────────────────────────────────────────\tACTION:separator".to_string());
 
     for item in &items {
         let path_str = item.path.to_string_lossy();
@@ -416,7 +483,7 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
             "🖼  [Static]"
         };
 
-        let raw_name = item.name.replace('_', " ").replace('-', " ");
+        let raw_name = item.name.replace(['_', '-'], " ");
         let clean_name = raw_name
             .split_whitespace()
             .map(|word| {
@@ -429,7 +496,11 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
             .collect::<Vec<_>>()
             .join(" ");
 
-        let suffix = if item.is_video { " (60fps)" } else { " (Static)" };
+        let suffix = if item.is_video {
+            " (60fps)"
+        } else {
+            " (Static)"
+        };
 
         input_lines.push(format!(
             "{:<12} {}{}\t{}",
@@ -586,7 +657,12 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
                     .status();
             } else {
                 let _ = std::process::Command::new("notify-send")
-                    .args(["-a", "VibeVeil", "VibeVeil Status", "No active media playback detected."])
+                    .args([
+                        "-a",
+                        "VibeVeil",
+                        "VibeVeil Status",
+                        "No active media playback detected.",
+                    ])
                     .status();
             }
         }
@@ -704,7 +780,9 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
                 } else {
                     None
                 };
-                let palette = art_path.as_ref().and_then(|p| extract_palette_from_image(p));
+                let palette = art_path
+                    .as_ref()
+                    .and_then(|p| extract_palette_from_image(p));
                 let ctx = TrackContext {
                     title: track.title.clone(),
                     artist: track.artist.clone(),
@@ -762,7 +840,9 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
                 } else {
                     None
                 };
-                let palette = art_path.as_ref().and_then(|p| extract_palette_from_image(p));
+                let palette = art_path
+                    .as_ref()
+                    .and_then(|p| extract_palette_from_image(p));
                 let ctx = TrackContext {
                     title: track.title.clone(),
                     artist: track.artist.clone(),
@@ -804,6 +884,41 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
                     .status();
             }
         }
+        "ACTION:toggle_hold" => {
+            let now_held = toggle_wallpaper_hold().unwrap_or(false);
+            if now_held {
+                let _ = std::process::Command::new("notify-send")
+                    .args([
+                        "-a",
+                        "VibeVeil",
+                        "Wallpaper Locked",
+                        "Automatic wallpaper reactions paused. Current wallpaper held.",
+                    ])
+                    .status();
+            } else {
+                let _ = std::process::Command::new("notify-send")
+                    .args([
+                        "-a",
+                        "VibeVeil",
+                        "Wallpaper Unlocked",
+                        "Dynamic music-driven wallpaper reactions resumed.",
+                    ])
+                    .status();
+            }
+        }
+        "ACTION:toggle_notifications" => {
+            let mut new_cfg = config.clone();
+            new_cfg.general.desktop_notifications = !new_cfg.general.desktop_notifications;
+            let status_msg = if new_cfg.general.desktop_notifications {
+                "Desktop notifications enabled."
+            } else {
+                "Desktop notifications disabled."
+            };
+            let _ = new_cfg.save();
+            let _ = std::process::Command::new("notify-send")
+                .args(["-a", "VibeVeil", "Notifications Toggled", status_msg])
+                .status();
+        }
         "ACTION:sync_hyprlock" => {
             println!("Synchronizing lockscreen colors...");
             let theme = load_active_theme();
@@ -824,9 +939,20 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
                 surface: parse_rgb(&theme.bg_hex),
                 accent: parse_rgb(&theme.accent_hex),
             };
-            let _ = crate::compositor::sync_hyprlock_palette(&config.compositor.hyprlock_colors_path, &default_pal);
+            let _ = crate::compositor::sync_hyprlock_palette(
+                &config.compositor.hyprlock_colors_path,
+                &default_pal,
+            );
             let _ = std::process::Command::new("notify-send")
-                .args(["-a", "VibeVeil", "Hyprlock Synchronized", &format!("Palette written to {}", config.compositor.hyprlock_colors_path.display())])
+                .args([
+                    "-a",
+                    "VibeVeil",
+                    "Hyprlock Synchronized",
+                    &format!(
+                        "Palette written to {}",
+                        config.compositor.hyprlock_colors_path.display()
+                    ),
+                ])
                 .status();
         }
         "ACTION:resync_theme" => {
@@ -834,11 +960,14 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
             let _ = std::process::Command::new("noctalia")
                 .args(["msg", "templates-apply"])
                 .status();
-            let _ = std::process::Command::new("hyprctl")
-                .arg("reload")
-                .status();
+            let _ = std::process::Command::new("hyprctl").arg("reload").status();
             let _ = std::process::Command::new("notify-send")
-                .args(["-a", "VibeVeil", "Theming Resynced", "Applied Noctalia M3 palettes and reloaded Hyprland."])
+                .args([
+                    "-a",
+                    "VibeVeil",
+                    "Theming Resynced",
+                    "Applied Noctalia M3 palettes and reloaded Hyprland.",
+                ])
                 .status();
         }
         "ACTION:toggle_pause" => {
@@ -856,11 +985,7 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
             let _ = std::process::Command::new("noctalia")
                 .args(["msg", "media", "next"])
                 .status()
-                .or_else(|_| {
-                    std::process::Command::new("playerctl")
-                        .arg("next")
-                        .status()
-                });
+                .or_else(|_| std::process::Command::new("playerctl").arg("next").status());
         }
         "ACTION:prev_track" => {
             let _ = std::process::Command::new("noctalia")
@@ -1092,70 +1217,105 @@ pub async fn run_cli_command(command: Commands, config: &mut Config) -> Result<(
             println!("✦ Listening for Spotify/MPRIS audio streams (Zero-CPU event loop active)...");
 
             let mut abort_handle: Option<tokio::task::AbortHandle> = None;
-            let debounce_ms = config.strategy.debounce_ms;
-
-            let mut player = None;
-            while player.is_none() {
-                player = mpris.find_active_player().await?;
-                if player.is_none() {
-                    sleep(Duration::from_millis(2000)).await;
-                }
-            }
-            let player = player.unwrap();
 
             use futures_util::StreamExt;
-            let mut stream = mpris.listen_for_properties_changed(&player).await?;
-            let mut pending_update = true;
-            let mut timeout_fut = Box::pin(sleep(Duration::from_millis(0)));
 
-            loop {
-                tokio::select! {
-                    msg = stream.next() => {
-                        if msg.is_none() { break; }
-                        pending_update = true;
-                        timeout_fut = Box::pin(sleep(Duration::from_millis(debounce_ms)));
+            'reconnect_loop: loop {
+                let debounce_ms = Config::load().strategy.debounce_ms;
+
+                let mut player = None;
+                while player.is_none() {
+                    player = match mpris.find_active_player().await {
+                        Ok(p) => p,
+                        Err(e) => {
+                            eprintln!("Warning: Error querying MPRIS players: {e}");
+                            None
+                        }
+                    };
+                    if player.is_none() {
+                        sleep(Duration::from_millis(2000)).await;
                     }
-                    _ = &mut timeout_fut, if pending_update => {
-                        pending_update = false;
+                }
+                let player = player.unwrap();
+                println!("Connected to player: {}", player);
 
-                        if let Ok(Some(track)) = mpris.get_current_track(&player).await {
-                            let track_key = format!("{}:{}:{}", track.artist, track.title, track.album);
-                            let active_cfg = Config::load();
+                let mut stream = match mpris.listen_for_properties_changed(&player).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Failed to subscribe to player properties: {e}. Retrying in 2s..."
+                        );
+                        sleep(Duration::from_millis(2000)).await;
+                        continue 'reconnect_loop;
+                    }
+                };
 
-                            handle_playback_status_transition(track.status, &mut last_status, &active_cfg, compositor.as_ref());
+                let mut pending_update = true;
+                let mut timeout_fut = Box::pin(sleep(Duration::from_millis(0)));
 
-                            if track.status == PlaybackStatus::Playing && last_track_key.as_deref() != Some(&track_key) {
-                                last_track_key = Some(track_key.clone());
-                                println!("▶ Now Playing: {} — {}", track.artist, track.title);
+                loop {
+                    tokio::select! {
+                        msg = stream.next() => {
+                            if msg.is_none() {
+                                println!("⚡ Player disconnected. Re-scanning for active MPRIS players...");
+                                break;
+                            }
+                            pending_update = true;
+                            timeout_fut = Box::pin(sleep(Duration::from_millis(debounce_ms)));
+                        }
+                        _ = &mut timeout_fut, if pending_update => {
+                            pending_update = false;
 
-                                if let Some(ah) = abort_handle.take() {
-                                    ah.abort();
+                            if let Ok(Some(track)) = mpris.get_current_track(&player).await {
+                                let track_key = format!("{}:{}:{}", track.artist, track.title, track.album);
+                                let active_cfg = Config::load();
+
+                                handle_playback_status_transition(
+                                    track.status,
+                                    &mut last_status,
+                                    &active_cfg,
+                                    compositor.as_ref(),
+                                    &mut last_track_key,
+                                );
+
+                                if is_wallpaper_held() {
+                                    println!("⏸ Wallpaper is held/locked. Skipping track transition.");
+                                    continue;
                                 }
 
-                                let pool_clone = pool.clone();
-                                let canvas_gen_clone = canvas_gen.clone();
-                                let dynamic_matcher: Arc<dyn MatchStrategy> = Arc::from(create_matcher(&active_cfg));
-                                let compositor_clone = compositor.clone();
-                                let dbus_conn = mpris.connection().clone();
-                                let notifications = active_cfg.general.desktop_notifications;
-                                let cache_limit = active_cfg.general.max_cache_mb;
+                                if track.status == PlaybackStatus::Playing && last_track_key.as_deref() != Some(&track_key) {
+                                    last_track_key = Some(track_key.clone());
+                                    println!("▶ Now Playing: {} — {}", track.artist, track.title);
 
-                                let handle = tokio::spawn(async move {
-                                    if let Some(matched) = process_track_and_apply(
-                                        &track,
-                                        &pool_clone,
-                                        dynamic_matcher.as_ref(),
-                                        compositor_clone.as_ref(),
-                                        &canvas_gen_clone,
-                                        true,
-                                        Some(cache_limit),
-                                        notifications,
-                                        Some(&dbus_conn),
-                                    ).await {
-                                        println!("  ↳ Matched: {} via {} ({})", matched.wallpaper_path.display(), matched.strategy, matched.reason);
+                                    if let Some(ah) = abort_handle.take() {
+                                        ah.abort();
                                     }
-                                });
-                                abort_handle = Some(handle.abort_handle());
+
+                                    let pool_clone = pool.clone();
+                                    let canvas_gen_clone = canvas_gen.clone();
+                                    let dynamic_matcher: Arc<dyn MatchStrategy> = Arc::from(create_matcher(&active_cfg));
+                                    let compositor_clone = compositor.clone();
+                                    let dbus_conn = mpris.connection().clone();
+                                    let notifications = active_cfg.general.desktop_notifications;
+                                    let cache_limit = active_cfg.general.max_cache_mb;
+
+                                    let handle = tokio::spawn(async move {
+                                        if let Some(matched) = process_track_and_apply(
+                                            &track,
+                                            &pool_clone,
+                                            dynamic_matcher.as_ref(),
+                                            compositor_clone.as_ref(),
+                                            &canvas_gen_clone,
+                                            true,
+                                            Some(cache_limit),
+                                            notifications,
+                                            Some(&dbus_conn),
+                                        ).await {
+                                            println!("  ↳ Matched: {} via {} ({})", matched.wallpaper_path.display(), matched.strategy, matched.reason);
+                                        }
+                                    });
+                                    abort_handle = Some(handle.abort_handle());
+                                }
                             }
                         }
                     }
@@ -1308,6 +1468,7 @@ mod tests {
     fn handle_playback_status_transition_branches() {
         let compositor = compositor::CustomCommandBackend::new("echo {file}".into());
         let mut last_status = None;
+        let mut last_track_key = Some("Artist:Title:Album".to_string());
         let mut cfg = Config::default();
 
         // 1. Transition to Playing
@@ -1316,8 +1477,10 @@ mod tests {
             &mut last_status,
             &cfg,
             &compositor,
+            &mut last_track_key,
         );
         assert_eq!(last_status, Some(PlaybackStatus::Playing));
+        assert_eq!(last_track_key.as_deref(), Some("Artist:Title:Album"));
 
         // 2. Same status -> no-op
         handle_playback_status_transition(
@@ -1325,6 +1488,7 @@ mod tests {
             &mut last_status,
             &cfg,
             &compositor,
+            &mut last_track_key,
         );
         assert_eq!(last_status, Some(PlaybackStatus::Playing));
 
@@ -1335,6 +1499,7 @@ mod tests {
             &mut last_status,
             &cfg,
             &compositor,
+            &mut last_track_key,
         );
         assert_eq!(last_status, Some(PlaybackStatus::Paused));
 
@@ -1345,10 +1510,11 @@ mod tests {
             &mut last_status,
             &cfg,
             &compositor,
+            &mut last_track_key,
         );
         assert_eq!(last_status, Some(PlaybackStatus::Stopped));
 
-        // 5. Transition to Paused with RestoreDefault
+        // 5. Transition to Paused with RestoreDefault resets last_track_key
         cfg.general.on_pause = PauseAction::RestoreDefault;
         cfg.general.default_wallpaper = None;
         handle_playback_status_transition(
@@ -1356,8 +1522,10 @@ mod tests {
             &mut last_status,
             &cfg,
             &compositor,
+            &mut last_track_key,
         );
         assert_eq!(last_status, Some(PlaybackStatus::Paused));
+        assert_eq!(last_track_key, None);
     }
 
     #[tokio::test]

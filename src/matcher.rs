@@ -136,10 +136,15 @@ impl MatchStrategy for ProceduralCanvasMatcher {
 
     fn find_match(&self, track: &TrackContext, _pool: &MediaPool) -> Option<MatchResult> {
         let art_path = track.art_path.as_ref()?;
-        let (canvas_path, is_video) = match self.generator.generate_ambient_video_loop(art_path, 1920, 1080) {
+        let (canvas_path, is_video) = match self
+            .generator
+            .generate_ambient_video_loop(art_path, 1920, 1080)
+        {
             Ok(v_path) => (v_path, true),
             Err(_) => (
-                self.generator.generate_ambient_canvas(art_path, 1920, 1080).ok()?,
+                self.generator
+                    .generate_ambient_canvas(art_path, 1920, 1080)
+                    .ok()?,
                 false,
             ),
         };
@@ -174,10 +179,15 @@ impl MatchStrategy for VinylCanvasMatcher {
 
     fn find_match(&self, track: &TrackContext, _pool: &MediaPool) -> Option<MatchResult> {
         let art_path = track.art_path.as_ref()?;
-        let (canvas_path, is_video) = match self.generator.generate_vinyl_video_loop(art_path, 1920, 1080) {
+        let (canvas_path, is_video) = match self
+            .generator
+            .generate_vinyl_video_loop(art_path, 1920, 1080)
+        {
             Ok(v_path) => (v_path, true),
             Err(_) => (
-                self.generator.generate_vinyl_canvas(art_path, 1920, 1080).ok()?,
+                self.generator
+                    .generate_vinyl_canvas(art_path, 1920, 1080)
+                    .ok()?,
                 false,
             ),
         };

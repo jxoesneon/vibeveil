@@ -12,6 +12,18 @@ pub trait CompositorBackend: Send + Sync {
         is_video: bool,
         palette: Option<&PaletteProfile>,
     ) -> Result<()>;
+
+    fn apply_wallpaper_with_meta(
+        &self,
+        path: &Path,
+        is_video: bool,
+        palette: Option<&PaletteProfile>,
+        _title: Option<&str>,
+        _artist: Option<&str>,
+    ) -> Result<()> {
+        self.apply_wallpaper(path, is_video, palette)
+    }
+
     fn pause(&self) -> Result<()>;
     fn resume(&self) -> Result<()>;
 }
@@ -58,6 +70,17 @@ impl CompositorBackend for HyprlandNoctaliaBackend {
         is_video: bool,
         palette: Option<&PaletteProfile>,
     ) -> Result<()> {
+        self.apply_wallpaper_with_meta(path, is_video, palette, None, None)
+    }
+
+    fn apply_wallpaper_with_meta(
+        &self,
+        path: &Path,
+        is_video: bool,
+        palette: Option<&PaletteProfile>,
+        title: Option<&str>,
+        artist: Option<&str>,
+    ) -> Result<()> {
         if is_video {
             let symlink = dirs::config_dir()
                 .map(|p| p.join("hypr/current_wallpaper.mp4"))
@@ -99,7 +122,16 @@ impl CompositorBackend for HyprlandNoctaliaBackend {
 
         if let Some(template) = &self.config.on_match_exec {
             let path_str = path.to_string_lossy().to_string();
-            let _ = execute_command_template(template, &[("{file}", &path_str)]);
+            let title_str = title.unwrap_or("").to_string();
+            let artist_str = artist.unwrap_or("").to_string();
+            let _ = execute_command_template(
+                template,
+                &[
+                    ("{file}", &path_str),
+                    ("{title}", &title_str),
+                    ("{artist}", &artist_str),
+                ],
+            );
         }
 
         self.reload_hyprland();
@@ -191,11 +223,31 @@ impl CompositorBackend for CustomCommandBackend {
     fn apply_wallpaper(
         &self,
         path: &Path,
+        is_video: bool,
+        palette: Option<&PaletteProfile>,
+    ) -> Result<()> {
+        self.apply_wallpaper_with_meta(path, is_video, palette, None, None)
+    }
+
+    fn apply_wallpaper_with_meta(
+        &self,
+        path: &Path,
         _is_video: bool,
         _palette: Option<&PaletteProfile>,
+        title: Option<&str>,
+        artist: Option<&str>,
     ) -> Result<()> {
         let path_str = path.to_string_lossy().to_string();
-        execute_command_template(&self.template, &[("{file}", &path_str)])
+        let title_str = title.unwrap_or("").to_string();
+        let artist_str = artist.unwrap_or("").to_string();
+        execute_command_template(
+            &self.template,
+            &[
+                ("{file}", &path_str),
+                ("{title}", &title_str),
+                ("{artist}", &artist_str),
+            ],
+        )
     }
 
     fn pause(&self) -> Result<()> {
@@ -272,6 +324,21 @@ mod tests {
         assert!(
             b.apply_wallpaper(Path::new("/tmp/x.png"), false, None)
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn custom_backend_substitutes_title_and_artist() {
+        let b = CustomCommandBackend::new("echo {artist} - {title} - {file}".into());
+        assert!(
+            b.apply_wallpaper_with_meta(
+                Path::new("/tmp/test.png"),
+                false,
+                None,
+                Some("Song Title"),
+                Some("Band Name"),
+            )
+            .is_ok()
         );
     }
 
