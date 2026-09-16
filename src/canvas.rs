@@ -478,117 +478,89 @@ impl CanvasGenerator {
         bg_canvas.save(&bg_tmp)?;
         disc_canvas.save(&disc_tmp)?;
 
-        let mode = self.probe_hwaccel();
-        let mut success = false;
+        let filter = "[1:v]format=rgba,rotate=2*PI*t/2:c=none:ow=iw:oh=ih[rot];[0:v][rot]overlay=(W-w)/2:(H-h)/2:shortest=1";
+        let res = self.encode_loop_video(&bg_tmp, &disc_tmp, 30, filter, &out_mp4);
 
+        let _ = std::fs::remove_file(bg_tmp);
+        let _ = std::fs::remove_file(disc_tmp);
+        res?;
+        Ok(out_mp4)
+    }
+
+    fn encode_loop_video(
+        &self,
+        input1: &Path,
+        input2: &Path,
+        framerate: u32,
+        base_filter: &str,
+        out_mp4: &Path,
+    ) -> Result<()> {
+        let fps_str = framerate.to_string();
+        let mode = self.probe_hwaccel();
+
+        let try_encode = |hw_init: &[&str], filter_suffix: &str, codec_args: &[&str]| -> bool {
+            let filter = format!("{}{}", base_filter, filter_suffix);
+            let mut cmd = std::process::Command::new("ffmpeg");
+            cmd.arg("-y");
+            if !hw_init.is_empty() {
+                cmd.args(hw_init);
+            }
+            cmd.args([
+                "-loop",
+                "1",
+                "-framerate",
+                &fps_str,
+                "-t",
+                "2",
+                "-i",
+                input1.to_string_lossy().as_ref(),
+                "-loop",
+                "1",
+                "-framerate",
+                &fps_str,
+                "-t",
+                "2",
+                "-i",
+                input2.to_string_lossy().as_ref(),
+                "-filter_complex",
+                &filter,
+                "-map",
+                "[outv]",
+            ]);
+            cmd.args(codec_args);
+            cmd.args(["-r", &fps_str, out_mp4.to_string_lossy().as_ref()]);
+            if let Ok(res) = cmd.output() {
+                res.status.success() && out_mp4.exists()
+            } else {
+                false
+            }
+        };
+
+        let mut success = false;
         if mode == HwAccelMode::Vaapi {
-            let va_res = std::process::Command::new("ffmpeg")
-                .args([
-                    "-y",
+            success = try_encode(
+                &[
                     "-init_hw_device",
                     "vaapi=va:/dev/dri/renderD128",
                     "-filter_hw_device",
                     "va",
-                    "-loop",
-                    "1",
-                    "-framerate",
-                    "30",
-                    "-t",
-                    "2",
-                    "-i",
-                    bg_tmp.to_string_lossy().as_ref(),
-                    "-loop",
-                    "1",
-                    "-framerate",
-                    "30",
-                    "-t",
-                    "2",
-                    "-i",
-                    disc_tmp.to_string_lossy().as_ref(),
-                    "-filter_complex",
-                    "[1:v]format=rgba,rotate=2*PI*t/2:c=none:ow=iw:oh=ih[rot];[0:v][rot]overlay=(W-w)/2:(H-h)/2:shortest=1,format=nv12,hwupload[outv]",
-                    "-map",
-                    "[outv]",
-                    "-c:v",
-                    "h264_vaapi",
-                    "-r",
-                    "30",
-                    out_mp4.to_string_lossy().as_ref(),
-                ])
-                .output();
-            if let Ok(res) = va_res
-                && res.status.success()
-                && out_mp4.exists()
-            {
-                success = true;
-            }
+                ],
+                ",format=nv12,hwupload[outv]",
+                &["-c:v", "h264_vaapi"],
+            );
         } else if mode == HwAccelMode::Nvenc {
-            let nv_res = std::process::Command::new("ffmpeg")
-                .args([
-                    "-y",
-                    "-loop",
-                    "1",
-                    "-framerate",
-                    "30",
-                    "-t",
-                    "2",
-                    "-i",
-                    bg_tmp.to_string_lossy().as_ref(),
-                    "-loop",
-                    "1",
-                    "-framerate",
-                    "30",
-                    "-t",
-                    "2",
-                    "-i",
-                    disc_tmp.to_string_lossy().as_ref(),
-                    "-filter_complex",
-                    "[1:v]format=rgba,rotate=2*PI*t/2:c=none:ow=iw:oh=ih[rot];[0:v][rot]overlay=(W-w)/2:(H-h)/2:shortest=1[outv]",
-                    "-map",
-                    "[outv]",
-                    "-c:v",
-                    "h264_nvenc",
-                    "-preset",
-                    "p1",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-r",
-                    "30",
-                    out_mp4.to_string_lossy().as_ref(),
-                ])
-                .output();
-            if let Ok(res) = nv_res
-                && res.status.success()
-                && out_mp4.exists()
-            {
-                success = true;
-            }
+            success = try_encode(
+                &[],
+                "[outv]",
+                &["-c:v", "h264_nvenc", "-preset", "p1", "-pix_fmt", "yuv420p"],
+            );
         }
 
         if !success {
-            let output = std::process::Command::new("ffmpeg")
-                .args([
-                    "-y",
-                    "-loop",
-                    "1",
-                    "-framerate",
-                    "30",
-                    "-t",
-                    "2",
-                    "-i",
-                    bg_tmp.to_string_lossy().as_ref(),
-                    "-loop",
-                    "1",
-                    "-framerate",
-                    "30",
-                    "-t",
-                    "2",
-                    "-i",
-                    disc_tmp.to_string_lossy().as_ref(),
-                    "-filter_complex",
-                    "[1:v]format=rgba,rotate=2*PI*t/2:c=none:ow=iw:oh=ih[rot];[0:v][rot]overlay=(W-w)/2:(H-h)/2:shortest=1[outv]",
-                    "-map",
-                    "[outv]",
+            let ok = try_encode(
+                &[],
+                "[outv]",
+                &[
                     "-c:v",
                     "libx264",
                     "-pix_fmt",
@@ -597,28 +569,13 @@ impl CanvasGenerator {
                     "ultrafast",
                     "-threads",
                     "0",
-                    "-r",
-                    "30",
-                    out_mp4.to_string_lossy().as_ref(),
-                ])
-                .output();
-
-            let _ = std::fs::remove_file(bg_tmp);
-            let _ = std::fs::remove_file(disc_tmp);
-
-            match output {
-                Ok(res) if res.status.success() && out_mp4.exists() => return Ok(out_mp4),
-                Ok(res) => anyhow::bail!(
-                    "FFmpeg CPU fallback failed with exit code: {:?}",
-                    res.status.code()
-                ),
-                Err(e) => anyhow::bail!("Failed to execute FFmpeg: {}", e),
+                ],
+            );
+            if !ok {
+                anyhow::bail!("FFmpeg video loop encoding failed");
             }
         }
-
-        let _ = std::fs::remove_file(bg_tmp);
-        let _ = std::fs::remove_file(disc_tmp);
-        Ok(out_mp4)
+        Ok(())
     }
 
     pub fn generate_ambient_video_loop(
@@ -661,150 +618,13 @@ impl CanvasGenerator {
         bg_canvas.save(&bg_tmp)?;
         card.save(&card_tmp)?;
 
-        let mode = self.probe_hwaccel();
-        let mut success = false;
-
-        if mode == HwAccelMode::Vaapi {
-            let va_res = std::process::Command::new("ffmpeg")
-                .args([
-                    "-y",
-                    "-init_hw_device",
-                    "vaapi=va:/dev/dri/renderD128",
-                    "-filter_hw_device",
-                    "va",
-                    "-loop",
-                    "1",
-                    "-framerate",
-                    "24",
-                    "-t",
-                    "2",
-                    "-i",
-                    bg_tmp.to_string_lossy().as_ref(),
-                    "-loop",
-                    "1",
-                    "-framerate",
-                    "24",
-                    "-t",
-                    "2",
-                    "-i",
-                    card_tmp.to_string_lossy().as_ref(),
-                    "-filter_complex",
-                    "[1:v]format=rgba[c];[0:v][c]overlay=(W-w)/2:'(H-h)/2+8*sin(2*PI*t/2)':shortest=1,format=nv12,hwupload[outv]",
-                    "-map",
-                    "[outv]",
-                    "-c:v",
-                    "h264_vaapi",
-                    "-r",
-                    "24",
-                    out_mp4.to_string_lossy().as_ref(),
-                ])
-                .output();
-            if let Ok(res) = va_res
-                && res.status.success()
-                && out_mp4.exists()
-            {
-                success = true;
-            }
-        } else if mode == HwAccelMode::Nvenc {
-            let nv_res = std::process::Command::new("ffmpeg")
-                .args([
-                    "-y",
-                    "-loop",
-                    "1",
-                    "-framerate",
-                    "24",
-                    "-t",
-                    "2",
-                    "-i",
-                    bg_tmp.to_string_lossy().as_ref(),
-                    "-loop",
-                    "1",
-                    "-framerate",
-                    "24",
-                    "-t",
-                    "2",
-                    "-i",
-                    card_tmp.to_string_lossy().as_ref(),
-                    "-filter_complex",
-                    "[1:v]format=rgba[c];[0:v][c]overlay=(W-w)/2:'(H-h)/2+8*sin(2*PI*t/2)':shortest=1[outv]",
-                    "-map",
-                    "[outv]",
-                    "-c:v",
-                    "h264_nvenc",
-                    "-preset",
-                    "p1",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-r",
-                    "24",
-                    out_mp4.to_string_lossy().as_ref(),
-                ])
-                .output();
-            if let Ok(res) = nv_res
-                && res.status.success()
-                && out_mp4.exists()
-            {
-                success = true;
-            }
-        }
-
-        if !success {
-            let output = std::process::Command::new("ffmpeg")
-                .args([
-                    "-y",
-                    "-loop",
-                    "1",
-                    "-framerate",
-                    "24",
-                    "-t",
-                    "2",
-                    "-i",
-                    bg_tmp.to_string_lossy().as_ref(),
-                    "-loop",
-                    "1",
-                    "-framerate",
-                    "24",
-                    "-t",
-                    "2",
-                    "-i",
-                    card_tmp.to_string_lossy().as_ref(),
-                    "-filter_complex",
-                    "[1:v]format=rgba[c];[0:v][c]overlay=(W-w)/2:'(H-h)/2+8*sin(2*PI*t/2)':shortest=1[outv]",
-                    "-map",
-                    "[outv]",
-                    "-c:v",
-                    "libx264",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-preset",
-                    "ultrafast",
-                    "-tune",
-                    "fastdecode",
-                    "-threads",
-                    "0",
-                    "-r",
-                    "24",
-                    out_mp4.to_string_lossy().as_ref(),
-                ])
-                .output();
-
-            let _ = std::fs::remove_file(bg_tmp);
-            let _ = std::fs::remove_file(card_tmp);
-
-            match output {
-                Ok(res) if res.status.success() && out_mp4.exists() => return Ok(out_mp4),
-                Ok(res) => {
-                    anyhow::bail!(
-                        "FFmpeg ambient failed with exit code: {:?}",
-                        res.status.code()
-                    )
-                }
-                Err(e) => anyhow::bail!("Failed to execute FFmpeg: {}", e),
-            }
-        }
+        let filter =
+            "[1:v]format=rgba[c];[0:v][c]overlay=(W-w)/2:'(H-h)/2+8*sin(2*PI*t/2)':shortest=1";
+        let res = self.encode_loop_video(&bg_tmp, &card_tmp, 24, filter, &out_mp4);
 
         let _ = std::fs::remove_file(bg_tmp);
         let _ = std::fs::remove_file(card_tmp);
+        res?;
         Ok(out_mp4)
     }
 }

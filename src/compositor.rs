@@ -729,11 +729,75 @@ mod tests {
         let backend = CustomCommandBackend::with_monitors("echo {monitor}:{file}".into(), monitors);
         let res = backend.apply_wallpaper(&dummy, false, None);
         assert!(res.is_ok());
+        let _ = backend.pause();
+        let _ = backend.resume();
     }
 
     #[test]
     fn test_detect_connected_monitors_fallback() {
         let mons = detect_connected_monitors();
         assert!(!mons.is_empty());
+    }
+
+    #[test]
+    fn test_hyprland_noctalia_video_and_monitors() {
+        use crate::config::MonitorConfig;
+        let dir = tempfile::tempdir().unwrap();
+        let dummy_vid = dir.path().join("wall.mp4");
+        std::fs::write(&dummy_vid, b"fake video bytes").unwrap();
+        let dummy_custom = dir.path().join("custom.png");
+        std::fs::write(&dummy_custom, b"custom png bytes").unwrap();
+
+        // 1. Single video without monitors
+        let cfg = no_trigger_hyprland_cfg();
+        let b = HyprlandNoctaliaBackend::new(cfg);
+        assert!(b.apply_wallpaper(&dummy_vid, true, None).is_ok());
+        assert!(b.pause().is_ok());
+        assert!(b.resume().is_ok());
+
+        // 2. Video with multi-monitor profiles and on_match_exec
+        let mut cfg_multi = no_trigger_hyprland_cfg();
+        cfg_multi.on_match_exec = Some("echo {file} {title} {artist} {monitor}".into());
+        cfg_multi.monitors = vec![
+            MonitorConfig {
+                name: "DP-1".into(),
+                strategy: None,
+                wallpaper: None,
+                primary: true,
+            },
+            MonitorConfig {
+                name: "HDMI-A-1".into(),
+                strategy: None,
+                wallpaper: Some(dummy_custom.clone()),
+                primary: false,
+            },
+        ];
+        let b_multi = HyprlandNoctaliaBackend::new(cfg_multi);
+        let res = b_multi.apply_wallpaper_with_meta(
+            &dummy_vid,
+            true,
+            None,
+            Some("Title"),
+            Some("Artist"),
+        );
+        // On Linux / CI, the symlink / service restart may succeed or encounter non-existent ~/.config/hypr
+        let _ = res;
+
+        // 3. Test create_compositor factory branches
+        let mut cmd_cfg = no_trigger_hyprland_cfg();
+        cmd_cfg.backend = BackendType::Command;
+        cmd_cfg.custom_command = Some("echo {file}".into());
+        let comp = create_compositor(&cmd_cfg);
+        assert_eq!(comp.name(), "custom-command");
+
+        let mut mpv_cfg = no_trigger_hyprland_cfg();
+        mpv_cfg.backend = BackendType::Mpvpaper;
+        let comp_mpv = create_compositor(&mpv_cfg);
+        assert_eq!(comp_mpv.name(), "hyprland-noctalia");
+
+        let mut swww_cfg = no_trigger_hyprland_cfg();
+        swww_cfg.backend = BackendType::Swww;
+        let comp_swww = create_compositor(&swww_cfg);
+        assert_eq!(comp_swww.name(), "hyprland-noctalia");
     }
 }

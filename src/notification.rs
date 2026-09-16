@@ -55,6 +55,7 @@ pub async fn send_desktop_notification(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     #[test]
     fn test_notification_formatting() {
@@ -66,5 +67,28 @@ mod tests {
 
         assert_eq!(summary, "VibeVeil: Resonance");
         assert_eq!(body, "HOME\nWallpaper: cyberpunk_lucy.mp4");
+    }
+
+    #[tokio::test]
+    async fn test_send_desktop_notification_branches() {
+        if let Ok(conn) = Connection::session().await {
+            let _ = send_desktop_notification(
+                &conn,
+                "Test Track",
+                "Test Artist",
+                "wallpaper.png",
+                None,
+            )
+            .await;
+            let icon_path = std::path::Path::new("/tmp/test_nonexistent_icon.png");
+            let _ = send_desktop_notification(
+                &conn,
+                "Test Track 2",
+                "Test Artist 2",
+                "wallpaper2.mp4",
+                Some(icon_path),
+            )
+            .await;
+        }
     }
 }
