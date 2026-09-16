@@ -1648,4 +1648,76 @@ mod tests {
         assert_eq!(active_palette.fg_hex.len(), 6);
         assert_eq!(active_palette.accent_hex.len(), 6);
     }
+
+    #[tokio::test]
+    async fn test_wallpaper_hold_toggle_logic() {
+        let original = is_wallpaper_held();
+        let toggled = toggle_wallpaper_hold().unwrap();
+        assert_eq!(toggled, !original);
+        assert_eq!(is_wallpaper_held(), !original);
+        let restored = toggle_wallpaper_hold().unwrap();
+        assert_eq!(restored, original);
+        assert_eq!(is_wallpaper_held(), original);
+    }
+
+    #[tokio::test]
+    async fn test_interactive_menu_all_action_branches() {
+        let pool_dir = TempDir::new().unwrap();
+        let test_img = pool_dir.path().join("pokemon_lucario.png");
+        let img = image::RgbImage::from_fn(32, 32, |_, _| image::Rgb([10, 20, 30]));
+        img.save(&test_img).unwrap();
+
+        let test_vid = pool_dir.path().join("anime_cyberpunk.mp4");
+        std::fs::write(&test_vid, b"fake_mp4_bytes").unwrap();
+
+        let lock_file = pool_dir.path().join("hyprlock.conf");
+
+        let mut cfg = Config::default();
+        cfg.general.media_pool = pool_dir.path().to_path_buf();
+        cfg.compositor.backend = config::BackendType::Command;
+        cfg.compositor.custom_command = Some("echo {file}".into());
+        cfg.compositor.hyprlock_colors_path = lock_file;
+
+        let actions = [
+            "ACTION:show_status",
+            "ACTION:toggle_hold",
+            "ACTION:toggle_notifications",
+            "ACTION:sync_hyprlock",
+            "ACTION:resync_theme",
+            "ACTION:toggle_pause",
+            "ACTION:next_track",
+            "ACTION:prev_track",
+            "ACTION:random_all",
+            "ACTION:random_pokemon",
+            "ACTION:random_anime",
+            "ACTION:set_mode_hybrid",
+            "ACTION:set_mode_ambient",
+            "ACTION:set_mode_vinyl",
+            "ACTION:set_mode_acoustic",
+            "ACTION:set_mode_color",
+            "ACTION:set_mode_rulebook",
+            "ACTION:separator",
+        ];
+
+        for action in actions {
+            let cmd = format!("echo {}", action);
+            let res = run_interactive_menu(Some(cmd), &cfg).await;
+            assert!(res.is_ok());
+        }
+
+        // Test direct file selection
+        let file_cmd = format!("echo {}", test_img.display());
+        let res_file = run_interactive_menu(Some(file_cmd), &cfg).await;
+        assert!(res_file.is_ok());
+
+        // Test video file selection
+        let vid_cmd = format!("echo {}", test_vid.display());
+        let res_vid = run_interactive_menu(Some(vid_cmd), &cfg).await;
+        assert!(res_vid.is_ok());
+
+        // Test empty selection
+        let empty_cmd = "echo".to_string();
+        let res_empty = run_interactive_menu(Some(empty_cmd), &cfg).await;
+        assert!(res_empty.is_ok());
+    }
 }

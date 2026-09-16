@@ -388,4 +388,45 @@ mod tests {
         assert_eq!(cached.energy, mood.energy);
         assert_eq!(cached.tags, mood.tags);
     }
+
+    #[tokio::test]
+    async fn test_acoustic_fallback_branches() {
+        let tmp = TempDir::new().unwrap();
+        // Provider Lastfm with no API key -> falls back to Local
+        let config = AcousticConfig {
+            cache_dir: tmp.path().to_path_buf(),
+            provider: AcousticProvider::Lastfm,
+            lastfm_api_key: None,
+            fallback: AcousticProvider::Local,
+            ..Default::default()
+        };
+        let classifier = AcousticClassifier::new(config);
+        let mood = classifier.classify("Heavy Battle Doom Metal", "Band").await;
+        assert!(mood.energy > 0.6);
+        assert_eq!(mood.provider, "local");
+
+        // Provider Musicbrainz with fallback to Lastfm (no key) -> fallback to Local
+        let config2 = AcousticConfig {
+            cache_dir: tmp.path().to_path_buf(),
+            provider: AcousticProvider::Musicbrainz,
+            fallback: AcousticProvider::Lastfm,
+            lastfm_api_key: None,
+            ..Default::default()
+        };
+        let classifier2 = AcousticClassifier::new(config2);
+        let mood2 = classifier2.classify("Lo-fi Calm Relax", "Artist").await;
+        assert!(mood2.energy < 0.5);
+
+        // Fallback to Musicbrainz
+        let config3 = AcousticConfig {
+            cache_dir: tmp.path().to_path_buf(),
+            provider: AcousticProvider::Lastfm,
+            lastfm_api_key: None,
+            fallback: AcousticProvider::Musicbrainz,
+            ..Default::default()
+        };
+        let classifier3 = AcousticClassifier::new(config3);
+        let mood3 = classifier3.classify("Random Title", "Random Artist").await;
+        assert_eq!(mood3.energy, 0.5);
+    }
 }
