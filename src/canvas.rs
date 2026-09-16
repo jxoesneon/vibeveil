@@ -1,3 +1,4 @@
+use crate::config::HwAccelMode;
 use anyhow::Result;
 use image::imageops;
 use sha2::{Digest, Sha256};
@@ -5,15 +6,85 @@ use std::path::{Path, PathBuf};
 
 pub struct CanvasGenerator {
     cache_dir: PathBuf,
+    hwaccel: HwAccelMode,
+}
+
+impl Default for CanvasGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CanvasGenerator {
     pub fn new() -> Self {
+        Self::with_hwaccel(HwAccelMode::Auto)
+    }
+
+    pub fn with_hwaccel(hwaccel: HwAccelMode) -> Self {
         let cache_dir = dirs::cache_dir()
             .map(|p| p.join("vibeveil/album_art"))
             .unwrap_or_else(|| PathBuf::from(".cache/vibeveil/album_art"));
         std::fs::create_dir_all(&cache_dir).ok();
-        Self { cache_dir }
+        Self { cache_dir, hwaccel }
+    }
+
+    pub fn probe_hwaccel(&self) -> HwAccelMode {
+        match self.hwaccel {
+            HwAccelMode::Cpu => HwAccelMode::Cpu,
+            HwAccelMode::Vaapi => HwAccelMode::Vaapi,
+            HwAccelMode::Nvenc => HwAccelMode::Nvenc,
+            HwAccelMode::Auto => {
+                if Path::new("/dev/dri/renderD128").exists() {
+                    let test = std::process::Command::new("ffmpeg")
+                        .args([
+                            "-y",
+                            "-f",
+                            "lavfi",
+                            "-i",
+                            "color=c=black:s=64x64:d=0.05",
+                            "-init_hw_device",
+                            "vaapi=va:/dev/dri/renderD128",
+                            "-filter_hw_device",
+                            "va",
+                            "-vf",
+                            "format=nv12,hwupload",
+                            "-c:v",
+                            "h264_vaapi",
+                            "-f",
+                            "null",
+                            "-",
+                        ])
+                        .output();
+                    if let Ok(out) = test
+                        && out.status.success()
+                    {
+                        return HwAccelMode::Vaapi;
+                    }
+                }
+
+                let nvenc_test = std::process::Command::new("ffmpeg")
+                    .args([
+                        "-y",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "color=c=black:s=64x64:d=0.05",
+                        "-c:v",
+                        "h264_nvenc",
+                        "-f",
+                        "null",
+                        "-",
+                    ])
+                    .output();
+                if let Ok(out) = nvenc_test
+                    && out.status.success()
+                {
+                    return HwAccelMode::Nvenc;
+                }
+
+                HwAccelMode::Cpu
+            }
+        }
     }
 
     pub async fn fetch_or_cache_art(&self, url: &str) -> Result<PathBuf> {
@@ -407,51 +478,147 @@ impl CanvasGenerator {
         bg_canvas.save(&bg_tmp)?;
         disc_canvas.save(&disc_tmp)?;
 
-        let output = std::process::Command::new("ffmpeg")
-            .args([
-                "-y",
-                "-loop",
-                "1",
-                "-framerate",
-                "30",
-                "-t",
-                "2",
-                "-i",
-                bg_tmp.to_string_lossy().as_ref(),
-                "-loop",
-                "1",
-                "-framerate",
-                "30",
-                "-t",
-                "2",
-                "-i",
-                disc_tmp.to_string_lossy().as_ref(),
-                "-filter_complex",
-                "[1:v]format=rgba,rotate=2*PI*t/2:c=none:ow=iw:oh=ih[rot];[0:v][rot]overlay=(W-w)/2:(H-h)/2:shortest=1[outv]",
-                "-map",
-                "[outv]",
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-preset",
-                "ultrafast",
-                "-threads",
-                "0",
-                "-r",
-                "30",
-                out_mp4.to_string_lossy().as_ref(),
-            ])
-            .output();
+        let mode = self.probe_hwaccel();
+        let mut success = false;
+
+        if mode == HwAccelMode::Vaapi {
+            let va_res = std::process::Command::new("ffmpeg")
+                .args([
+                    "-y",
+                    "-init_hw_device",
+                    "vaapi=va:/dev/dri/renderD128",
+                    "-filter_hw_device",
+                    "va",
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    "30",
+                    "-t",
+                    "2",
+                    "-i",
+                    bg_tmp.to_string_lossy().as_ref(),
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    "30",
+                    "-t",
+                    "2",
+                    "-i",
+                    disc_tmp.to_string_lossy().as_ref(),
+                    "-filter_complex",
+                    "[1:v]format=rgba,rotate=2*PI*t/2:c=none:ow=iw:oh=ih[rot];[0:v][rot]overlay=(W-w)/2:(H-h)/2:shortest=1,format=nv12,hwupload[outv]",
+                    "-map",
+                    "[outv]",
+                    "-c:v",
+                    "h264_vaapi",
+                    "-r",
+                    "30",
+                    out_mp4.to_string_lossy().as_ref(),
+                ])
+                .output();
+            if let Ok(res) = va_res
+                && res.status.success()
+                && out_mp4.exists()
+            {
+                success = true;
+            }
+        } else if mode == HwAccelMode::Nvenc {
+            let nv_res = std::process::Command::new("ffmpeg")
+                .args([
+                    "-y",
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    "30",
+                    "-t",
+                    "2",
+                    "-i",
+                    bg_tmp.to_string_lossy().as_ref(),
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    "30",
+                    "-t",
+                    "2",
+                    "-i",
+                    disc_tmp.to_string_lossy().as_ref(),
+                    "-filter_complex",
+                    "[1:v]format=rgba,rotate=2*PI*t/2:c=none:ow=iw:oh=ih[rot];[0:v][rot]overlay=(W-w)/2:(H-h)/2:shortest=1[outv]",
+                    "-map",
+                    "[outv]",
+                    "-c:v",
+                    "h264_nvenc",
+                    "-preset",
+                    "p1",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-r",
+                    "30",
+                    out_mp4.to_string_lossy().as_ref(),
+                ])
+                .output();
+            if let Ok(res) = nv_res
+                && res.status.success()
+                && out_mp4.exists()
+            {
+                success = true;
+            }
+        }
+
+        if !success {
+            let output = std::process::Command::new("ffmpeg")
+                .args([
+                    "-y",
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    "30",
+                    "-t",
+                    "2",
+                    "-i",
+                    bg_tmp.to_string_lossy().as_ref(),
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    "30",
+                    "-t",
+                    "2",
+                    "-i",
+                    disc_tmp.to_string_lossy().as_ref(),
+                    "-filter_complex",
+                    "[1:v]format=rgba,rotate=2*PI*t/2:c=none:ow=iw:oh=ih[rot];[0:v][rot]overlay=(W-w)/2:(H-h)/2:shortest=1[outv]",
+                    "-map",
+                    "[outv]",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-preset",
+                    "ultrafast",
+                    "-threads",
+                    "0",
+                    "-r",
+                    "30",
+                    out_mp4.to_string_lossy().as_ref(),
+                ])
+                .output();
+
+            let _ = std::fs::remove_file(bg_tmp);
+            let _ = std::fs::remove_file(disc_tmp);
+
+            match output {
+                Ok(res) if res.status.success() && out_mp4.exists() => return Ok(out_mp4),
+                Ok(res) => anyhow::bail!(
+                    "FFmpeg CPU fallback failed with exit code: {:?}",
+                    res.status.code()
+                ),
+                Err(e) => anyhow::bail!("Failed to execute FFmpeg: {}", e),
+            }
+        }
 
         let _ = std::fs::remove_file(bg_tmp);
         let _ = std::fs::remove_file(disc_tmp);
-
-        match output {
-            Ok(res) if res.status.success() && out_mp4.exists() => Ok(out_mp4),
-            Ok(res) => anyhow::bail!("FFmpeg failed with exit code: {:?}", res.status.code()),
-            Err(e) => anyhow::bail!("Failed to execute FFmpeg: {}", e),
-        }
+        Ok(out_mp4)
     }
 
     pub fn generate_ambient_video_loop(
@@ -494,58 +661,151 @@ impl CanvasGenerator {
         bg_canvas.save(&bg_tmp)?;
         card.save(&card_tmp)?;
 
-        let output = std::process::Command::new("ffmpeg")
-            .args([
-                "-y",
-                "-loop",
-                "1",
-                "-framerate",
-                "24",
-                "-t",
-                "2",
-                "-i",
-                bg_tmp.to_string_lossy().as_ref(),
-                "-loop",
-                "1",
-                "-framerate",
-                "24",
-                "-t",
-                "2",
-                "-i",
-                card_tmp.to_string_lossy().as_ref(),
-                "-filter_complex",
-                "[1:v]format=rgba[c];[0:v][c]overlay=(W-w)/2:'(H-h)/2+8*sin(2*PI*t/2)':shortest=1[outv]",
-                "-map",
-                "[outv]",
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-preset",
-                "ultrafast",
-                "-tune",
-                "fastdecode",
-                "-threads",
-                "0",
-                "-r",
-                "24",
-                out_mp4.to_string_lossy().as_ref(),
-            ])
-            .output();
+        let mode = self.probe_hwaccel();
+        let mut success = false;
+
+        if mode == HwAccelMode::Vaapi {
+            let va_res = std::process::Command::new("ffmpeg")
+                .args([
+                    "-y",
+                    "-init_hw_device",
+                    "vaapi=va:/dev/dri/renderD128",
+                    "-filter_hw_device",
+                    "va",
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    "24",
+                    "-t",
+                    "2",
+                    "-i",
+                    bg_tmp.to_string_lossy().as_ref(),
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    "24",
+                    "-t",
+                    "2",
+                    "-i",
+                    card_tmp.to_string_lossy().as_ref(),
+                    "-filter_complex",
+                    "[1:v]format=rgba[c];[0:v][c]overlay=(W-w)/2:'(H-h)/2+8*sin(2*PI*t/2)':shortest=1,format=nv12,hwupload[outv]",
+                    "-map",
+                    "[outv]",
+                    "-c:v",
+                    "h264_vaapi",
+                    "-r",
+                    "24",
+                    out_mp4.to_string_lossy().as_ref(),
+                ])
+                .output();
+            if let Ok(res) = va_res
+                && res.status.success()
+                && out_mp4.exists()
+            {
+                success = true;
+            }
+        } else if mode == HwAccelMode::Nvenc {
+            let nv_res = std::process::Command::new("ffmpeg")
+                .args([
+                    "-y",
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    "24",
+                    "-t",
+                    "2",
+                    "-i",
+                    bg_tmp.to_string_lossy().as_ref(),
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    "24",
+                    "-t",
+                    "2",
+                    "-i",
+                    card_tmp.to_string_lossy().as_ref(),
+                    "-filter_complex",
+                    "[1:v]format=rgba[c];[0:v][c]overlay=(W-w)/2:'(H-h)/2+8*sin(2*PI*t/2)':shortest=1[outv]",
+                    "-map",
+                    "[outv]",
+                    "-c:v",
+                    "h264_nvenc",
+                    "-preset",
+                    "p1",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-r",
+                    "24",
+                    out_mp4.to_string_lossy().as_ref(),
+                ])
+                .output();
+            if let Ok(res) = nv_res
+                && res.status.success()
+                && out_mp4.exists()
+            {
+                success = true;
+            }
+        }
+
+        if !success {
+            let output = std::process::Command::new("ffmpeg")
+                .args([
+                    "-y",
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    "24",
+                    "-t",
+                    "2",
+                    "-i",
+                    bg_tmp.to_string_lossy().as_ref(),
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    "24",
+                    "-t",
+                    "2",
+                    "-i",
+                    card_tmp.to_string_lossy().as_ref(),
+                    "-filter_complex",
+                    "[1:v]format=rgba[c];[0:v][c]overlay=(W-w)/2:'(H-h)/2+8*sin(2*PI*t/2)':shortest=1[outv]",
+                    "-map",
+                    "[outv]",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-preset",
+                    "ultrafast",
+                    "-tune",
+                    "fastdecode",
+                    "-threads",
+                    "0",
+                    "-r",
+                    "24",
+                    out_mp4.to_string_lossy().as_ref(),
+                ])
+                .output();
+
+            let _ = std::fs::remove_file(bg_tmp);
+            let _ = std::fs::remove_file(card_tmp);
+
+            match output {
+                Ok(res) if res.status.success() && out_mp4.exists() => return Ok(out_mp4),
+                Ok(res) => {
+                    anyhow::bail!(
+                        "FFmpeg ambient failed with exit code: {:?}",
+                        res.status.code()
+                    )
+                }
+                Err(e) => anyhow::bail!("Failed to execute FFmpeg: {}", e),
+            }
+        }
 
         let _ = std::fs::remove_file(bg_tmp);
         let _ = std::fs::remove_file(card_tmp);
-
-        match output {
-            Ok(res) if res.status.success() && out_mp4.exists() => Ok(out_mp4),
-            Ok(res) => {
-                anyhow::bail!(
-                    "FFmpeg ambient failed with exit code: {:?}",
-                    res.status.code()
-                )
-            }
-            Err(e) => anyhow::bail!("Failed to execute FFmpeg: {}", e),
-        }
+        Ok(out_mp4)
     }
 }
 
@@ -598,7 +858,10 @@ mod tests {
     fn make_cg(dir: &TempDir) -> CanvasGenerator {
         let cache = dir.path().join("cache");
         std::fs::create_dir_all(&cache).unwrap();
-        CanvasGenerator { cache_dir: cache }
+        CanvasGenerator {
+            cache_dir: cache,
+            hwaccel: HwAccelMode::Auto,
+        }
     }
 
     // --- fetch_or_cache_art ---
@@ -752,9 +1015,7 @@ mod tests {
         });
         img.save(&art_path).unwrap();
 
-        let generator = CanvasGenerator {
-            cache_dir: dir.path().to_path_buf(),
-        };
+        let generator = make_cg(&dir);
         let res = generator.generate_vinyl_canvas(&art_path, 640, 360);
         assert!(res.is_ok());
         let out = res.unwrap();
@@ -784,9 +1045,7 @@ mod tests {
         });
         img.save(&art_path).unwrap();
 
-        let generator = CanvasGenerator {
-            cache_dir: dir.path().to_path_buf(),
-        };
+        let generator = make_cg(&dir);
         let res = generator.generate_vinyl_video_loop(&art_path, 320, 180);
         assert!(res.is_ok());
         let mp4_path = res.unwrap();
@@ -822,9 +1081,7 @@ mod tests {
         });
         img.save(&art_path).unwrap();
 
-        let generator = CanvasGenerator {
-            cache_dir: dir.path().to_path_buf(),
-        };
+        let generator = make_cg(&dir);
         let res = generator.generate_ambient_video_loop(&art_path, 320, 180);
         assert!(res.is_ok());
         let mp4_path = res.unwrap();
@@ -839,5 +1096,26 @@ mod tests {
         // Second call should return cached without regenerating
         let res2 = generator.generate_ambient_video_loop(&art_path, 320, 180);
         assert_eq!(res2.unwrap(), mp4_path);
+    }
+
+    #[test]
+    fn test_probe_hwaccel_modes() {
+        let dir = TempDir::new().unwrap();
+        let mut cg = make_cg(&dir);
+        cg.hwaccel = HwAccelMode::Cpu;
+        assert_eq!(cg.probe_hwaccel(), HwAccelMode::Cpu);
+
+        cg.hwaccel = HwAccelMode::Vaapi;
+        assert_eq!(cg.probe_hwaccel(), HwAccelMode::Vaapi);
+
+        cg.hwaccel = HwAccelMode::Nvenc;
+        assert_eq!(cg.probe_hwaccel(), HwAccelMode::Nvenc);
+
+        cg.hwaccel = HwAccelMode::Auto;
+        let probed = cg.probe_hwaccel();
+        assert!(matches!(
+            probed,
+            HwAccelMode::Vaapi | HwAccelMode::Nvenc | HwAccelMode::Cpu
+        ));
     }
 }

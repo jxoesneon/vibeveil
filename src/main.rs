@@ -17,6 +17,7 @@ use config::{Config, MatchMode, PauseAction};
 use matcher::{MatchResult, MatchStrategy, TrackContext, create_matcher};
 use mpris::{MprisClient, MprisTrack, PlaybackStatus};
 use pool::MediaPool;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -55,7 +56,11 @@ pub enum Commands {
     /// Re-index and cache color profiles for the media pool
     Index,
     /// Display current MPRIS playback and active theme status
-    Status,
+    Status {
+        /// Output status formatted as JSON for status bars (Waybar, Eww, etc.)
+        #[arg(short, long)]
+        json: bool,
+    },
     /// Generate a default config file in ~/.config/vibeveil/config.toml
     InitConfig,
     /// Generate shell completions for the specified shell
@@ -118,6 +123,103 @@ pub fn format_status_output(player: Option<&str>, track: Option<&MprisTrack>) ->
     } else {
         "No active MPRIS media player detected.".into()
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StatusJson {
+    pub text: String,
+    pub alt: String,
+    pub tooltip: String,
+    pub class: Vec<String>,
+    pub player: Option<String>,
+    pub status: Option<String>,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub art_url: Option<String>,
+    pub held: bool,
+}
+
+pub fn format_status_json(player: Option<&str>, track: Option<&MprisTrack>, held: bool) -> String {
+    let (text, alt, class, status_str) = match (player, track) {
+        (Some(_), Some(t)) => {
+            let s_str = match t.status {
+                PlaybackStatus::Playing => "Playing",
+                PlaybackStatus::Paused => "Paused",
+                PlaybackStatus::Stopped => "Stopped",
+            };
+            let symbol = match t.status {
+                PlaybackStatus::Playing => "♪",
+                PlaybackStatus::Paused => "⏸",
+                PlaybackStatus::Stopped => "⏹",
+            };
+            let lock_prefix = if held { "🔒 " } else { "" };
+            let display_text = format!("{}{} {} - {}", lock_prefix, symbol, t.artist, t.title);
+            let state_alt = if held {
+                "held".to_string()
+            } else {
+                s_str.to_lowercase()
+            };
+            let mut classes = vec![s_str.to_lowercase()];
+            if held {
+                classes.push("held".into());
+            } else {
+                classes.push("unheld".into());
+            }
+            (display_text, state_alt, classes, Some(s_str.to_string()))
+        }
+        (Some(p), None) => {
+            let display_text = format!("Connected ({})", p);
+            (
+                display_text,
+                "connected".into(),
+                vec!["connected".into()],
+                None,
+            )
+        }
+        (None, _) => ("Idle".into(), "idle".into(), vec!["idle".into()], None),
+    };
+
+    let theme = load_active_theme();
+    let mut tooltip = String::new();
+    if let Some(p) = player {
+        tooltip.push_str(&format!("Player : {}\n", p));
+    }
+    if let Some(ref s) = status_str {
+        tooltip.push_str(&format!("Status : {}\n", s));
+    }
+    if let Some(t) = track {
+        tooltip.push_str(&format!(
+            "Track  : {}\nArtist : {}\nAlbum  : {}\n",
+            t.title, t.artist, t.album
+        ));
+    }
+    tooltip.push_str(&format!(
+        "Hold   : {}\nTheme  : Primary=#{}, Accent=#{}",
+        if held {
+            "Locked (Held)"
+        } else {
+            "Dynamic (Active)"
+        },
+        theme.accent_hex,
+        theme.fg_hex
+    ));
+
+    let json_obj = StatusJson {
+        text,
+        alt,
+        tooltip: tooltip.trim_end().to_string(),
+        class,
+        player: player.map(str::to_string),
+        status: status_str,
+        title: track.map(|t| t.title.clone()),
+        artist: track.map(|t| t.artist.clone()),
+        album: track.map(|t| t.album.clone()),
+        art_url: track.and_then(|t| t.art_url.clone()),
+        held,
+    };
+
+    serde_json::to_string(&json_obj).unwrap_or_else(|_| "{}".into())
 }
 
 pub fn format_match_result(track: &MprisTrack, matched: &MatchResult) -> String {
@@ -675,7 +777,7 @@ pub async fn run_interactive_menu(launcher: Option<String>, config: &Config) -> 
     };
 
     let compositor = create_compositor(&config.compositor);
-    let canvas_gen = CanvasGenerator::new();
+    let canvas_gen = CanvasGenerator::with_hwaccel(config.strategy.hwaccel);
 
     match action_or_path {
         "ACTION:show_status" => {
@@ -1128,7 +1230,7 @@ pub fn setup_daemon_components(
         config.general.media_pool.clone(),
         config.general.extensions.clone(),
     );
-    let canvas_gen = Arc::new(CanvasGenerator::new());
+    let canvas_gen = Arc::new(CanvasGenerator::with_hwaccel(config.strategy.hwaccel));
     let matcher: Arc<dyn MatchStrategy> = Arc::from(create_matcher(config));
     let compositor: Arc<dyn CompositorBackend> = Arc::from(create_compositor(&config.compositor));
     (pool, canvas_gen, matcher, compositor)
@@ -1158,17 +1260,25 @@ pub async fn run_cli_command(command: Commands, config: &mut Config) -> Result<(
             let count = execute_index_pool(&mut pool, true);
             println!("Indexed {} media items with color profiles.", count);
         }
-        Commands::Status => {
+        Commands::Status { json } => {
             let mpris = MprisClient::new().await?;
             let player = mpris.find_active_player().await?;
             let mut track = None;
             if let Some(ref p) = player {
                 track = mpris.get_current_track(p).await?;
             }
-            println!(
-                "{}",
-                format_status_output(player.as_deref(), track.as_ref())
-            );
+            if json {
+                let held = is_wallpaper_held();
+                println!(
+                    "{}",
+                    format_status_json(player.as_deref(), track.as_ref(), held)
+                );
+            } else {
+                println!(
+                    "{}",
+                    format_status_output(player.as_deref(), track.as_ref())
+                );
+            }
         }
         Commands::Menu { launcher } => {
             run_interactive_menu(launcher, config).await?;
@@ -1186,7 +1296,7 @@ pub async fn run_cli_command(command: Commands, config: &mut Config) -> Result<(
             let track = match mpris.get_current_track(&player).await? {
                 Some(t) => t,
                 None => {
-                    println!("No active track playing.");
+                    println!("No track currently playing on player '{}'.", player);
                     return Ok(());
                 }
             };
@@ -1197,7 +1307,7 @@ pub async fn run_cli_command(command: Commands, config: &mut Config) -> Result<(
             );
             execute_index_pool(&mut pool, false);
 
-            let canvas_gen = Arc::new(CanvasGenerator::new());
+            let canvas_gen = Arc::new(CanvasGenerator::with_hwaccel(config.strategy.hwaccel));
             let matcher = create_matcher(config);
             let compositor: Arc<dyn CompositorBackend> =
                 Arc::from(create_compositor(&config.compositor));
@@ -1370,7 +1480,13 @@ mod tests {
         assert_eq!(c2.command, Commands::Index);
 
         let c3 = Cli::try_parse_from(["vibeveil", "status"]).unwrap();
-        assert_eq!(c3.command, Commands::Status);
+        assert_eq!(c3.command, Commands::Status { json: false });
+
+        let c3_json = Cli::try_parse_from(["vibeveil", "status", "--json"]).unwrap();
+        assert_eq!(c3_json.command, Commands::Status { json: true });
+
+        let c3_j = Cli::try_parse_from(["vibeveil", "status", "-j"]).unwrap();
+        assert_eq!(c3_j.command, Commands::Status { json: true });
 
         let c4 = Cli::try_parse_from(["vibeveil", "match"]).unwrap();
         assert_eq!(c4.command, Commands::Match { apply: false });
@@ -1454,6 +1570,42 @@ mod tests {
         assert!(s_full.contains("Track Title   : Track1"));
         assert!(s_full.contains("Status        : Playing"));
         assert!(s_full.contains("Art URL       : https://example.com/art.png"));
+    }
+
+    #[test]
+    fn format_status_json_variations() {
+        let j_none = format_status_json(None, None, false);
+        let parsed_none: StatusJson = serde_json::from_str(&j_none).unwrap();
+        assert_eq!(parsed_none.alt, "idle");
+        assert_eq!(parsed_none.class, vec!["idle"]);
+        assert!(!parsed_none.held);
+
+        let j_player = format_status_json(Some("spotify"), None, false);
+        let parsed_player: StatusJson = serde_json::from_str(&j_player).unwrap();
+        assert_eq!(parsed_player.alt, "connected");
+        assert_eq!(parsed_player.player.as_deref(), Some("spotify"));
+
+        let track = MprisTrack {
+            player: "spotify".into(),
+            title: "Track1".into(),
+            artist: "Artist1".into(),
+            album: "Album1".into(),
+            art_url: Some("https://example.com/art.png".into()),
+            status: PlaybackStatus::Playing,
+        };
+        let j_full = format_status_json(Some("spotify"), Some(&track), false);
+        let parsed_full: StatusJson = serde_json::from_str(&j_full).unwrap();
+        assert_eq!(parsed_full.alt, "playing");
+        assert!(parsed_full.class.contains(&"playing".to_string()));
+        assert!(parsed_full.class.contains(&"unheld".to_string()));
+        assert_eq!(parsed_full.title.as_deref(), Some("Track1"));
+        assert!(!parsed_full.held);
+
+        let j_held = format_status_json(Some("spotify"), Some(&track), true);
+        let parsed_held: StatusJson = serde_json::from_str(&j_held).unwrap();
+        assert_eq!(parsed_held.alt, "held");
+        assert!(parsed_held.class.contains(&"held".to_string()));
+        assert!(parsed_held.held);
     }
 
     #[test]
@@ -1626,7 +1778,8 @@ mod tests {
         assert!(res_idx.is_ok());
 
         // Test Status command (tolerates live player or absence of player)
-        let _ = run_cli_command(Commands::Status, &mut cfg).await;
+        let _ = run_cli_command(Commands::Status { json: false }, &mut cfg).await;
+        let _ = run_cli_command(Commands::Status { json: true }, &mut cfg).await;
 
         // Test Match command
         let _ = run_cli_command(Commands::Match { apply: false }, &mut cfg).await;
@@ -1674,6 +1827,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_wallpaper_hold_toggle_logic() {
+        struct HoldLockRestoreGuard {
+            original_held: bool,
+        }
+        impl Drop for HoldLockRestoreGuard {
+            fn drop(&mut self) {
+                if is_wallpaper_held() != self.original_held {
+                    let _ = toggle_wallpaper_hold();
+                }
+            }
+        }
+        let _guard = HoldLockRestoreGuard {
+            original_held: is_wallpaper_held(),
+        };
+
         let original = is_wallpaper_held();
         let toggled = toggle_wallpaper_hold().unwrap();
         assert_eq!(toggled, !original);
@@ -1685,6 +1852,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_interactive_menu_all_action_branches() {
+        struct HoldLockRestoreGuard {
+            original_held: bool,
+        }
+        impl Drop for HoldLockRestoreGuard {
+            fn drop(&mut self) {
+                if is_wallpaper_held() != self.original_held {
+                    let _ = toggle_wallpaper_hold();
+                }
+            }
+        }
+        let _hold_guard = HoldLockRestoreGuard {
+            original_held: is_wallpaper_held(),
+        };
+
         struct ConfigRestoreGuard {
             path: std::path::PathBuf,
             original_content: Option<String>,

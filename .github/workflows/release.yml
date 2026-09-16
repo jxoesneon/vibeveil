@@ -5,50 +5,57 @@ on:
     tags:
       - 'v*'
 
-permissions:
-  contents: write
-
 jobs:
-  create-release:
-    name: Create GitHub Release
+  build-release:
+    name: Build and Publish Release Artifacts
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: taiki-e/create-gh-release-action@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  build-release-artifacts:
-    name: Build Release Binary (${{ matrix.target }})
-    needs: create-release
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact_name: vibeveil-x86_64-unknown-linux-gnu
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            artifact_name: vibeveil-aarch64-unknown-linux-gnu
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev pkg-config
 
-      - name: Build and Upload Binary
-        uses: taiki-e/upload-rust-binary-action@v1
+      - name: Build Release Binary
+        run: cargo build --release --locked
+
+      - name: Prepare Release Bundle
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          DIST_DIR="vibeveil-${VERSION}-x86_64-unknown-linux-gnu"
+          mkdir -p "${DIST_DIR}/completions"
+
+          cp target/release/vibeveil "${DIST_DIR}/"
+          strip "${DIST_DIR}/vibeveil"
+
+          # Shell completions
+          "${DIST_DIR}/vibeveil" completions bash > "${DIST_DIR}/completions/vibeveil.bash"
+          "${DIST_DIR}/vibeveil" completions zsh > "${DIST_DIR}/completions/_vibeveil"
+          "${DIST_DIR}/vibeveil" completions fish > "${DIST_DIR}/completions/vibeveil.fish"
+
+          # Service and docs
+          cp packaging/systemd/vibeveil.service "${DIST_DIR}/"
+          cp README.md "${DIST_DIR}/"
+          cp LICENSE-MIT "${DIST_DIR}/"
+          cp LICENSE-APACHE "${DIST_DIR}/"
+
+          tar -czvf "${DIST_DIR}.tar.gz" "${DIST_DIR}"
+          sha256sum "${DIST_DIR}.tar.gz" > "${DIST_DIR}.tar.gz.sha256"
+
+          echo "ARCHIVE=${DIST_DIR}.tar.gz" >> $GITHUB_ENV
+          echo "CHECKSUM=${DIST_DIR}.tar.gz.sha256" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          bin: vibeveil
-          target: ${{ matrix.target }}
-          tar: unix
-          token: ${{ secrets.GITHUB_TOKEN }}
+          files: |
+            ${{ env.ARCHIVE }}
+            ${{ env.CHECKSUM }}
+          generate_release_notes: true

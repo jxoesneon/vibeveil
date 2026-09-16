@@ -122,10 +122,15 @@ pub struct ProceduralCanvasMatcher {
 }
 
 impl ProceduralCanvasMatcher {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             generator: CanvasGenerator::new(),
         }
+    }
+
+    pub fn with_generator(generator: CanvasGenerator) -> Self {
+        Self { generator }
     }
 }
 
@@ -168,10 +173,15 @@ pub struct VinylCanvasMatcher {
 }
 
 impl VinylCanvasMatcher {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             generator: CanvasGenerator::new(),
         }
+    }
+
+    pub fn with_generator(generator: CanvasGenerator) -> Self {
+        Self { generator }
     }
 }
 
@@ -277,7 +287,9 @@ impl HybridMatcher {
             rulebook: RulebookMatcher::new(config.clone()),
             acoustic: AcousticMatcher::new(config),
             color_distance: ColorDistanceMatcher::new(config.strategy.max_acceptable_delta_e),
-            procedural: ProceduralCanvasMatcher::new(),
+            procedural: ProceduralCanvasMatcher::with_generator(CanvasGenerator::with_hwaccel(
+                config.strategy.hwaccel,
+            )),
             acoustic_enabled: config.acoustic.enabled,
         }
     }
@@ -317,9 +329,13 @@ pub fn create_matcher(config: &Config) -> Box<dyn MatchStrategy> {
         MatchMode::ColorDistance => Box::new(ColorDistanceMatcher::new(
             config.strategy.max_acceptable_delta_e,
         )),
-        MatchMode::ProceduralCanvas => Box::new(ProceduralCanvasMatcher::new()),
+        MatchMode::ProceduralCanvas => Box::new(ProceduralCanvasMatcher::with_generator(
+            CanvasGenerator::with_hwaccel(config.strategy.hwaccel),
+        )),
         MatchMode::Acoustic => Box::new(AcousticMatcher::new(config)),
-        MatchMode::Vinyl => Box::new(VinylCanvasMatcher::new()),
+        MatchMode::Vinyl => Box::new(VinylCanvasMatcher::with_generator(
+            CanvasGenerator::with_hwaccel(config.strategy.hwaccel),
+        )),
         MatchMode::Hybrid => Box::new(HybridMatcher::new(config)),
     }
 }

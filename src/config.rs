@@ -50,6 +50,18 @@ pub struct StrategyConfig {
     pub procedural_fallback: bool,
     #[serde(default = "default_debounce_ms")]
     pub debounce_ms: u64,
+    #[serde(default)]
+    pub hwaccel: HwAccelMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum HwAccelMode {
+    #[default]
+    Auto,
+    Vaapi,
+    Nvenc,
+    Cpu,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,6 +82,17 @@ pub enum ColorMetric {
     Cielab,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MonitorConfig {
+    pub name: String,
+    #[serde(default)]
+    pub strategy: Option<MatchMode>,
+    #[serde(default)]
+    pub wallpaper: Option<PathBuf>,
+    #[serde(default)]
+    pub primary: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompositorConfig {
     #[serde(default = "default_backend")]
@@ -86,6 +109,8 @@ pub struct CompositorConfig {
     pub sync_hyprlock: bool,
     #[serde(default = "default_hyprlock_colors_path")]
     pub hyprlock_colors_path: PathBuf,
+    #[serde(default)]
+    pub monitors: Vec<MonitorConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,6 +257,7 @@ impl Default for StrategyConfig {
             max_acceptable_delta_e: default_max_delta_e(),
             procedural_fallback: default_generate_canvas_fallback(),
             debounce_ms: default_debounce_ms(),
+            hwaccel: HwAccelMode::default(),
         }
     }
 }
@@ -246,6 +272,7 @@ impl Default for CompositorConfig {
             on_match_exec: None,
             sync_hyprlock: false,
             hyprlock_colors_path: default_hyprlock_colors_path(),
+            monitors: Vec::new(),
         }
     }
 }
@@ -631,5 +658,36 @@ fallback = "local"
         assert!(cfg.acoustic.enabled);
         assert_eq!(cfg.acoustic.provider, AcousticProvider::Musicbrainz);
         assert_eq!(cfg.acoustic.fallback, AcousticProvider::Local);
+    }
+
+    #[test]
+    fn toml_hwaccel_and_monitors_config() {
+        let toml_str = r#"
+[strategy]
+hwaccel = "vaapi"
+
+[compositor]
+[[compositor.monitors]]
+name = "eDP-1"
+strategy = "vinyl"
+primary = true
+
+[[compositor.monitors]]
+name = "DP-1"
+wallpaper = "/tmp/wall.mp4"
+primary = false
+"#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.strategy.hwaccel, HwAccelMode::Vaapi);
+        assert_eq!(cfg.compositor.monitors.len(), 2);
+        assert_eq!(cfg.compositor.monitors[0].name, "eDP-1");
+        assert_eq!(cfg.compositor.monitors[0].strategy, Some(MatchMode::Vinyl));
+        assert!(cfg.compositor.monitors[0].primary);
+        assert_eq!(cfg.compositor.monitors[1].name, "DP-1");
+        assert_eq!(
+            cfg.compositor.monitors[1].wallpaper,
+            Some(PathBuf::from("/tmp/wall.mp4"))
+        );
+        assert!(!cfg.compositor.monitors[1].primary);
     }
 }

@@ -38,14 +38,19 @@ impl HyprlandNoctaliaBackend {
     }
 
     fn update_noctalia(&self, poster_or_img: &Path) {
+        self.update_noctalia_monitor(poster_or_img, None);
+    }
+
+    fn update_noctalia_monitor(&self, poster_or_img: &Path, monitor: Option<&str>) {
         if self.config.trigger_noctalia_theming {
-            let _ = Command::new("noctalia")
-                .args([
-                    "msg",
-                    "wallpaper-set",
-                    poster_or_img.to_string_lossy().as_ref(),
-                ])
-                .output();
+            let mut cmd = Command::new("noctalia");
+            cmd.args(["msg", "wallpaper-set"]);
+            if let Some(mon) = monitor {
+                cmd.args(["--output", mon]);
+            }
+            cmd.arg(poster_or_img.to_string_lossy().as_ref());
+            let _ = cmd.output();
+
             let _ = Command::new("noctalia")
                 .args(["msg", "templates-apply"])
                 .output();
@@ -81,7 +86,61 @@ impl CompositorBackend for HyprlandNoctaliaBackend {
         title: Option<&str>,
         artist: Option<&str>,
     ) -> Result<()> {
-        if is_video {
+        if !self.config.monitors.is_empty() {
+            let mut any_video = false;
+            for mon in &self.config.monitors {
+                let mon_path = mon.wallpaper.as_deref().unwrap_or(path);
+                let mon_is_video = mon_path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| matches!(ext.to_lowercase().as_str(), "mp4" | "mkv" | "webm"))
+                    .unwrap_or(is_video);
+
+                if mon_is_video {
+                    any_video = true;
+                    let mon_symlink = dirs::config_dir()
+                        .map(|p| p.join(format!("hypr/current_wallpaper_{}.mp4", mon.name)))
+                        .unwrap_or_else(|| {
+                            PathBuf::from(format!(".current_wallpaper_{}.mp4", mon.name))
+                        });
+                    let _ = std::fs::remove_file(&mon_symlink);
+                    #[cfg(unix)]
+                    let _ = std::os::unix::fs::symlink(mon_path, &mon_symlink);
+
+                    if mon.primary {
+                        let symlink = dirs::config_dir()
+                            .map(|p| p.join("hypr/current_wallpaper.mp4"))
+                            .unwrap_or_else(|| PathBuf::from(".current_wallpaper.mp4"));
+                        let _ = std::fs::remove_file(&symlink);
+                        #[cfg(unix)]
+                        let _ = std::os::unix::fs::symlink(mon_path, &symlink);
+                    }
+
+                    if let Some(parent) = mon_path.parent() {
+                        let stem = mon_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                        let thumb = parent.join(".thumbnails").join(format!("{}.png", stem));
+                        let sibling_png = mon_path.with_extension("png");
+                        if thumb.exists() {
+                            self.update_noctalia_monitor(&thumb, Some(&mon.name));
+                        } else if sibling_png.exists() {
+                            self.update_noctalia_monitor(&sibling_png, Some(&mon.name));
+                        }
+                    }
+                } else {
+                    self.update_noctalia_monitor(mon_path, Some(&mon.name));
+                }
+            }
+
+            if any_video {
+                let _ = Command::new("systemctl")
+                    .args(["--user", "restart", "hypr-livewallpaper.service"])
+                    .output();
+            } else {
+                let _ = Command::new("systemctl")
+                    .args(["--user", "stop", "hypr-livewallpaper.service"])
+                    .output();
+            }
+        } else if is_video {
             let symlink = dirs::config_dir()
                 .map(|p| p.join("hypr/current_wallpaper.mp4"))
                 .unwrap_or_else(|| PathBuf::from(".current_wallpaper.mp4"));
@@ -124,14 +183,29 @@ impl CompositorBackend for HyprlandNoctaliaBackend {
             let path_str = path.to_string_lossy().to_string();
             let title_str = title.unwrap_or("").to_string();
             let artist_str = artist.unwrap_or("").to_string();
-            let _ = execute_command_template(
-                template,
-                &[
-                    ("{file}", &path_str),
-                    ("{title}", &title_str),
-                    ("{artist}", &artist_str),
-                ],
-            );
+            if template.contains("{monitor}") && !self.config.monitors.is_empty() {
+                for mon in &self.config.monitors {
+                    let _ = execute_command_template(
+                        template,
+                        &[
+                            ("{file}", &path_str),
+                            ("{title}", &title_str),
+                            ("{artist}", &artist_str),
+                            ("{monitor}", &mon.name),
+                        ],
+                    );
+                }
+            } else {
+                let _ = execute_command_template(
+                    template,
+                    &[
+                        ("{file}", &path_str),
+                        ("{title}", &title_str),
+                        ("{artist}", &artist_str),
+                        ("{monitor}", "all"),
+                    ],
+                );
+            }
         }
 
         self.reload_hyprland();
@@ -207,11 +281,20 @@ pub fn execute_command_template(template: &str, vars: &[(&str, &str)]) -> Result
 
 pub struct CustomCommandBackend {
     template: String,
+    monitors: Vec<crate::config::MonitorConfig>,
 }
 
 impl CustomCommandBackend {
+    #[allow(dead_code)]
     pub fn new(template: String) -> Self {
-        Self { template }
+        Self {
+            template,
+            monitors: Vec::new(),
+        }
+    }
+
+    pub fn with_monitors(template: String, monitors: Vec<crate::config::MonitorConfig>) -> Self {
+        Self { template, monitors }
     }
 }
 
@@ -240,14 +323,33 @@ impl CompositorBackend for CustomCommandBackend {
         let path_str = path.to_string_lossy().to_string();
         let title_str = title.unwrap_or("").to_string();
         let artist_str = artist.unwrap_or("").to_string();
-        execute_command_template(
-            &self.template,
-            &[
-                ("{file}", &path_str),
-                ("{title}", &title_str),
-                ("{artist}", &artist_str),
-            ],
-        )
+
+        if self.template.contains("{monitor}") && !self.monitors.is_empty() {
+            for mon in &self.monitors {
+                let mon_path = mon.wallpaper.as_deref().unwrap_or(path);
+                let mon_path_str = mon_path.to_string_lossy().to_string();
+                execute_command_template(
+                    &self.template,
+                    &[
+                        ("{file}", &mon_path_str),
+                        ("{title}", &title_str),
+                        ("{artist}", &artist_str),
+                        ("{monitor}", &mon.name),
+                    ],
+                )?;
+            }
+            Ok(())
+        } else {
+            execute_command_template(
+                &self.template,
+                &[
+                    ("{file}", &path_str),
+                    ("{title}", &title_str),
+                    ("{artist}", &artist_str),
+                    ("{monitor}", "all"),
+                ],
+            )
+        }
     }
 
     fn pause(&self) -> Result<()> {
@@ -269,9 +371,33 @@ pub fn create_compositor(config: &CompositorConfig) -> Box<dyn CompositorBackend
                 .custom_command
                 .clone()
                 .unwrap_or_else(|| "echo {file}".into());
-            Box::new(CustomCommandBackend::new(tmpl))
+            Box::new(CustomCommandBackend::with_monitors(
+                tmpl,
+                config.monitors.clone(),
+            ))
         }
     }
+}
+
+#[allow(dead_code)]
+pub fn detect_connected_monitors() -> Vec<String> {
+    if let Ok(output) = Command::new("hyprctl").args(["-j", "monitors"]).output()
+        && output.status.success()
+        && let Ok(text) = String::from_utf8(output.stdout)
+        && let Ok(val) = serde_json::from_str::<serde_json::Value>(&text)
+        && let Some(arr) = val.as_array()
+    {
+        let mut list = Vec::new();
+        for item in arr {
+            if let Some(name) = item.get("name").and_then(|n| n.as_str()) {
+                list.push(name.to_string());
+            }
+        }
+        if !list.is_empty() {
+            return list;
+        }
+    }
+    vec!["all".to_string()]
 }
 
 #[cfg(test)]
@@ -288,6 +414,7 @@ mod tests {
             on_match_exec: None,
             sync_hyprlock: false,
             hyprlock_colors_path: PathBuf::from("/tmp/hyprlock-colors.conf"),
+            monitors: Vec::new(),
         }
     }
 
@@ -455,6 +582,7 @@ mod tests {
             on_match_exec: None,
             sync_hyprlock: false,
             hyprlock_colors_path: PathBuf::from("/tmp/hyprlock.conf"),
+            monitors: Vec::new(),
         };
         let c = create_compositor(&cfg);
         assert_eq!(c.name(), "custom-command");
@@ -470,6 +598,7 @@ mod tests {
             on_match_exec: None,
             sync_hyprlock: false,
             hyprlock_colors_path: PathBuf::from("/tmp/hyprlock.conf"),
+            monitors: Vec::new(),
         };
         let c = create_compositor(&cfg);
         assert_eq!(c.name(), "custom-command");
@@ -563,6 +692,7 @@ mod tests {
             on_match_exec: Some("echo {file}".into()),
             sync_hyprlock: true,
             hyprlock_colors_path: target.clone(),
+            monitors: Vec::new(),
         };
         let b = HyprlandNoctaliaBackend::new(cfg);
         let dummy = dir.path().join("wall.png");
@@ -573,5 +703,37 @@ mod tests {
         assert!(target.exists());
         let content = std::fs::read_to_string(&target).unwrap();
         assert!(content.contains("$primary = rgb(123456)"));
+    }
+
+    #[test]
+    fn test_custom_command_multi_monitor_dispatch() {
+        use crate::config::MonitorConfig;
+        let dir = tempfile::tempdir().unwrap();
+        let dummy = dir.path().join("main_wall.png");
+        std::fs::write(&dummy, b"dummy").unwrap();
+
+        let monitors = vec![
+            MonitorConfig {
+                name: "DP-1".into(),
+                strategy: None,
+                wallpaper: None,
+                primary: true,
+            },
+            MonitorConfig {
+                name: "HDMI-A-1".into(),
+                strategy: None,
+                wallpaper: Some(PathBuf::from("/custom/wall.png")),
+                primary: false,
+            },
+        ];
+        let backend = CustomCommandBackend::with_monitors("echo {monitor}:{file}".into(), monitors);
+        let res = backend.apply_wallpaper(&dummy, false, None);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_detect_connected_monitors_fallback() {
+        let mons = detect_connected_monitors();
+        assert!(!mons.is_empty());
     }
 }

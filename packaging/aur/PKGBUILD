@@ -2,26 +2,22 @@
 pkgname=vibeveil
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="Universal music-driven dynamic wallpaper & semantic desktop theming engine"
+pkgdesc="Universal music-driven dynamic wallpaper and semantic desktop theming engine in Rust"
 arch=('x86_64' 'aarch64')
 url="https://github.com/jxoesneon/vibeveil"
 license=('MIT' 'Apache-2.0')
-depends=('dbus' 'glibc' 'gcc-libs')
-makedepends=('cargo')
+depends=('gcc-libs' 'ffmpeg')
 optdepends=(
-    'hyprland: Wayland compositor support'
-    'noctalia-shell: Material You dynamic bar and widget theming'
-    'mpvpaper: Hardware-accelerated video wallpaper daemon'
-    'swww: Efficient Wayland animated wallpaper daemon'
-    'ffmpeg: Automatic thumbnail extraction for video wallpapers'
-    'rofi: Interactive wallpaper switcher menu'
-    'wofi: Interactive Wayland wallpaper switcher menu'
-    'hyprlock: Dynamic lockscreen color synchronization'
-    'libnotify: Desktop notification verification and diagnostics'
+    'hyprland: dynamic wallpaper compositor and border coloring'
+    'hyprlock: dynamic lockscreen color synchronization'
+    'mpvpaper: hardware-accelerated live video wallpaper playback'
+    'swww: animated wallpaper daemon'
+    'rofi-wayland: modern interactive control center switcher'
+    'wofi: alternative Wayland application launcher and switcher'
+    'libnotify: desktop notifications'
 )
-provides=('vibeveil')
-conflicts=('vibeveil-bin' 'vibeveil-git')
-source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+makedepends=('cargo')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 
 prepare() {
@@ -35,35 +31,25 @@ build() {
     export RUSTUP_TOOLCHAIN=stable
     export CARGO_TARGET_DIR=target
     cargo build --frozen --release --all-targets
-
-    # Generate shell completions
-    ./target/release/vibeveil completions bash > vibeveil.bash
-    ./target/release/vibeveil completions zsh > _vibeveil
-    ./target/release/vibeveil completions fish > vibeveil.fish
 }
 
 check() {
     cd "$pkgname-$pkgver"
     export RUSTUP_TOOLCHAIN=stable
-    cargo test --frozen
+    cargo test --frozen --all-targets
 }
 
 package() {
     cd "$pkgname-$pkgver"
-
-    # Install binary
-    install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
-
-    # Install systemd user service
+    install -Dm755 "target/release/vibeveil" "$pkgdir/usr/bin/vibeveil"
     install -Dm644 "packaging/systemd/vibeveil.service" "$pkgdir/usr/lib/systemd/user/vibeveil.service"
+    sed -i 's|%h/.local/bin/vibeveil|/usr/bin/vibeveil|g' "$pkgdir/usr/lib/systemd/user/vibeveil.service"
+    install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 "LICENSE-MIT" "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+    install -Dm644 "LICENSE-APACHE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
 
-    # Install shell completions
-    install -Dm644 "vibeveil.bash" "$pkgdir/usr/share/bash-completion/completions/vibeveil"
-    install -Dm644 "_vibeveil" "$pkgdir/usr/share/zsh/site-functions/_vibeveil"
-    install -Dm644 "vibeveil.fish" "$pkgdir/usr/share/fish/vendor_completions.d/vibeveil.fish"
-
-    # Install documentation
-    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
-    install -Dm644 docs/PRD.md "$pkgdir/usr/share/doc/$pkgname/PRD.md"
-    install -Dm644 docs/RUNBOOK.md "$pkgdir/usr/share/doc/$pkgname/RUNBOOK.md"
+    # Shell completions
+    target/release/vibeveil completions bash | install -Dm644 /dev/stdin "$pkgdir/usr/share/bash-completion/completions/vibeveil"
+    target/release/vibeveil completions zsh | install -Dm644 /dev/stdin "$pkgdir/usr/share/zsh/site-functions/_vibeveil"
+    target/release/vibeveil completions fish | install -Dm644 /dev/stdin "$pkgdir/usr/share/fish/vendor_completions.d/vibeveil.fish"
 }

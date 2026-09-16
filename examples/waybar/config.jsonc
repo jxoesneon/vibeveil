@@ -1,0 +1,15 @@
+// Waybar module configuration for VibeVeil
+// Place in ~/.config/waybar/config.jsonc or include in your "modules-right" / "modules-center" array:
+// "custom/vibeveil"
+
+"custom/vibeveil": {
+    "format": "{}",
+    "return-type": "json",
+    "interval": 1,
+    "exec": "vibeveil status --json",
+    "on-click": "vibeveil menu",
+    "on-click-right": "vibeveil menu -l 'echo ACTION:toggle_hold'",
+    "on-click-middle": "vibeveil menu -l 'echo ACTION:toggle_pause'",
+    "tooltip": true,
+    "escape": true
+}

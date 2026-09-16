@@ -1,0 +1,33 @@
+/* VibeVeil Waybar Styling */
+#custom-vibeveil {
+    padding: 0 12px;
+    margin: 4px 6px;
+    border-radius: 12px;
+    background: rgba(26, 17, 14, 0.75);
+    color: #f1dfd9;
+    font-weight: bold;
+    transition: all 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+    border: 1px solid rgba(255, 181, 153, 0.2);
+}
+
+#custom-vibeveil.playing {
+    color: #ffb599;
+    border-color: rgba(255, 181, 153, 0.6);
+    background: rgba(45, 30, 25, 0.85);
+}
+
+#custom-vibeveil.paused {
+    color: #a09590;
+    opacity: 0.85;
+}
+
+#custom-vibeveil.held {
+    color: #ffb4a9;
+    border-color: #ff5449;
+    background: rgba(65, 0, 2, 0.65);
+}
+
+#custom-vibeveil.idle {
+    color: #605753;
+    opacity: 0.6;
+}
